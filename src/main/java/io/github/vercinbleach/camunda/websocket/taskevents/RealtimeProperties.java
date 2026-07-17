@@ -131,7 +131,6 @@ public class RealtimeProperties {
 
     public static class Authentication {
         private String provider = HttpPrincipalAuthenticationProvider.ID;
-        private final Jwt jwt = new Jwt();
 
         public String getProvider() {
             return provider;
@@ -141,66 +140,9 @@ public class RealtimeProperties {
             this.provider = provider;
         }
 
-        public Jwt getJwt() {
-            return jwt;
-        }
-
         private void validate() {
             if (provider == null || provider.isBlank()) {
                 throw new IllegalArgumentException("camunda.websocket.task-events.authentication.provider must be configured");
-            }
-            if (StompBearerJwtAuthenticationProvider.ID.equals(provider)) {
-                jwt.validate();
-            }
-        }
-    }
-
-    public static class Jwt {
-        private String issuer;
-        private String audience = "camunda-engine";
-        private String authorizedParty = "camunda-frontend";
-        private String principalClaim = "preferred_username";
-
-        public String getIssuer() {
-            return issuer;
-        }
-
-        public void setIssuer(String issuer) {
-            this.issuer = issuer;
-        }
-
-        public String getAudience() {
-            return audience;
-        }
-
-        public void setAudience(String audience) {
-            this.audience = audience;
-        }
-
-        public String getAuthorizedParty() {
-            return authorizedParty;
-        }
-
-        public void setAuthorizedParty(String authorizedParty) {
-            this.authorizedParty = authorizedParty;
-        }
-
-        public String getPrincipalClaim() {
-            return principalClaim;
-        }
-
-        public void setPrincipalClaim(String principalClaim) {
-            this.principalClaim = principalClaim;
-        }
-
-        private void validate() {
-            if (issuer != null && issuer.isBlank()) {
-                throw new IllegalArgumentException("task-events JWT issuer must not be blank");
-            }
-            if (audience == null || audience.isBlank()
-                    || authorizedParty == null || authorizedParty.isBlank()
-                    || principalClaim == null || principalClaim.isBlank()) {
-                throw new IllegalArgumentException("realtime JWT audience, authorized-party and principal-claim must not be blank");
             }
         }
     }

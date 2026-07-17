@@ -91,15 +91,28 @@ camunda:
     task-events:
       authentication:
         provider: stomp-bearer-jwt
-        jwt:
-          issuer: https://id.example.com/realms/workflows
-          audience: camunda-engine
-          authorized-party: workflow-frontend
-          principal-claim: preferred_username
 ```
 
-This mode requires a Spring `JwtDecoder` bean. The client must set a fresh token
-for every connection:
+This mode reuses the application's Spring Security `JwtDecoder`, including
+whatever signature, issuer, audience or custom claim validators the application
+configured. It also reuses an
+application `JwtAuthenticationConverter` bean when one is available; otherwise
+Spring Security's standard converter is used (`sub` is the principal claim).
+There is no second JWT configuration inside this library.
+
+Applications that use another principal claim should expose the same converter
+used by their HTTP resource server:
+
+```java
+@Bean
+JwtAuthenticationConverter jwtAuthenticationConverter() {
+  JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+  converter.setPrincipalClaimName("preferred_username");
+  return converter;
+}
+```
+
+The client must set a fresh token for every connection:
 
 ```ts
 client.beforeConnect = async () => {
@@ -109,8 +122,8 @@ client.beforeConnect = async () => {
 };
 ```
 
-The server validates issuer, audience, `azp`, expiration and the configured
-principal claim. It closes the WebSocket when the token expires.
+The application decoder remains the single authority for JWT validation. The
+library requires `exp` so it can close the WebSocket when the token expires.
 
 ## Configuration
 

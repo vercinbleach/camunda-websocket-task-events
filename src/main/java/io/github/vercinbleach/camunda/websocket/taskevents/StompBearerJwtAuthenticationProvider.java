@@ -2,18 +2,19 @@ package io.github.vercinbleach.camunda.websocket.taskevents;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 
-import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -24,18 +25,22 @@ public class StompBearerJwtAuthenticationProvider implements TaskRealtimeAuthent
     private static final Pattern BEARER = Pattern.compile("^Bearer ([^\\s]+)$");
 
     private final JwtDecoder jwtDecoder;
-    private final RealtimeProperties properties;
-    private final Clock clock;
+    private final JwtAuthenticationConverter jwtAuthenticationConverter;
 
     @Autowired
-    public StompBearerJwtAuthenticationProvider(JwtDecoder jwtDecoder, RealtimeProperties properties) {
-        this(jwtDecoder, properties, Clock.systemUTC());
+    public StompBearerJwtAuthenticationProvider(
+            JwtDecoder jwtDecoder,
+            ObjectProvider<JwtAuthenticationConverter> jwtAuthenticationConverters) {
+        this(jwtDecoder, jwtAuthenticationConverters.getIfAvailable(JwtAuthenticationConverter::new));
     }
 
-    StompBearerJwtAuthenticationProvider(JwtDecoder jwtDecoder, RealtimeProperties properties, Clock clock) {
-        this.jwtDecoder = jwtDecoder;
-        this.properties = properties;
-        this.clock = clock;
+    StompBearerJwtAuthenticationProvider(
+            JwtDecoder jwtDecoder,
+            JwtAuthenticationConverter jwtAuthenticationConverter) {
+        this.jwtDecoder = Objects.requireNonNull(jwtDecoder, "jwtDecoder");
+        this.jwtAuthenticationConverter = Objects.requireNonNull(
+                jwtAuthenticationConverter,
+                "jwtAuthenticationConverter");
     }
 
     @Override
@@ -46,17 +51,15 @@ public class StompBearerJwtAuthenticationProvider implements TaskRealtimeAuthent
     @Override
     public TaskRealtimeAuthentication authenticate(StompHeaderAccessor connectHeaders) {
         Jwt jwt = jwtDecoder.decode(extractBearer(connectHeaders));
-        validateClaims(jwt);
-
-        String principalClaim = properties.getAuthentication().getJwt().getPrincipalClaim();
-        String username = jwt.getClaimAsString(principalClaim);
-        if (!StringUtils.hasText(username)) {
-            throw new IllegalArgumentException("missing configured principal claim");
+        AbstractAuthenticationToken authentication = jwtAuthenticationConverter.convert(jwt);
+        if (authentication == null) {
+            throw new IllegalArgumentException("JWT authentication converter returned no authentication");
         }
-
-        return new TaskRealtimeAuthentication(
-                UsernamePasswordAuthenticationToken.authenticated(username.trim(), null, List.of()),
-                jwt.getExpiresAt());
+        Instant expiresAt = jwt.getExpiresAt();
+        if (expiresAt == null) {
+            throw new IllegalArgumentException("JWT must contain an expiration");
+        }
+        return new TaskRealtimeAuthentication(authentication, expiresAt);
     }
 
     private String extractBearer(StompHeaderAccessor accessor) {
@@ -74,24 +77,5 @@ public class StompBearerJwtAuthenticationProvider implements TaskRealtimeAuthent
             throw new IllegalArgumentException("CONNECT Authorization is not Bearer");
         }
         return matcher.group(1);
-    }
-
-    private void validateClaims(Jwt jwt) {
-        RealtimeProperties.Jwt jwtProperties = properties.getAuthentication().getJwt();
-        String issuer = jwtProperties.getIssuer();
-        if (StringUtils.hasText(issuer)
-                && (jwt.getIssuer() == null || !issuer.equals(jwt.getIssuer().toString()))) {
-            throw new IllegalArgumentException("issuer mismatch");
-        }
-        if (jwt.getAudience() == null || !jwt.getAudience().contains(jwtProperties.getAudience())) {
-            throw new IllegalArgumentException("audience mismatch");
-        }
-        if (!jwtProperties.getAuthorizedParty().equals(jwt.getClaimAsString("azp"))) {
-            throw new IllegalArgumentException("authorized party mismatch");
-        }
-        Instant expiresAt = jwt.getExpiresAt();
-        if (expiresAt == null || !expiresAt.isAfter(clock.instant())) {
-            throw new IllegalArgumentException("expired token");
-        }
     }
 }

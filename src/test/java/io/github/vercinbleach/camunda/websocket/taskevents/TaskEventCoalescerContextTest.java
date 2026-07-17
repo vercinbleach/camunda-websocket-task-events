@@ -25,8 +25,7 @@ class TaskEventCoalescerContextTest {
             .withUserConfiguration(FullRealtimeConfiguration.class, JwtDecoderConfiguration.class)
             .withPropertyValues(
                     "camunda.websocket.task-events.websocket.allowed-origins=http://localhost:3000",
-                    "camunda.websocket.task-events.authentication.provider=stomp-bearer-jwt",
-                    "camunda.websocket.task-events.authentication.jwt.issuer=https://id.example.com");
+                    "camunda.websocket.task-events.authentication.provider=stomp-bearer-jwt");
 
     @Test
     void selectsProductionConstructorsInASpringContext() {
