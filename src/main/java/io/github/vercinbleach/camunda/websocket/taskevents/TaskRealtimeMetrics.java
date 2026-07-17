@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class TaskRealtimeMetrics {
     private final Counter committedEvents;
-    private final Counter rejectedAuthentications;
     private final Counter rejectedSubscriptions;
     private final Counter emittedEnvelopes;
     private final Counter deliveryFailures;
@@ -27,7 +26,6 @@ public class TaskRealtimeMetrics {
 
     public TaskRealtimeMetrics(MeterRegistry registry) {
         committedEvents = counter(registry, "task_realtime_committed_events");
-        rejectedAuthentications = counter(registry, "task_realtime_rejected_authentications");
         rejectedSubscriptions = counter(registry, "task_realtime_rejected_subscriptions");
         emittedEnvelopes = counter(registry, "task_realtime_emitted_envelopes");
         deliveryFailures = counter(registry, "task_realtime_delivery_failures");
@@ -37,10 +35,6 @@ public class TaskRealtimeMetrics {
 
     public void recordCommittedEvent() {
         committedEvents.increment();
-    }
-
-    public void recordRejectedAuthentication() {
-        rejectedAuthentications.increment();
     }
 
     public void recordRejectedSubscription() {
@@ -61,10 +55,6 @@ public class TaskRealtimeMetrics {
 
     public long getCommittedEvents() {
         return (long) committedEvents.count();
-    }
-
-    public long getRejectedAuthentications() {
-        return (long) rejectedAuthentications.count();
     }
 
     public long getRejectedSubscriptions() {

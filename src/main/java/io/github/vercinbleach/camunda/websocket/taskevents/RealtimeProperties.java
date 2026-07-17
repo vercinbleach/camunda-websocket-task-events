@@ -11,20 +11,14 @@ import java.util.List;
 public class RealtimeProperties {
 
     private final Websocket websocket = new Websocket();
-    private final Authentication authentication = new Authentication();
 
     public Websocket getWebsocket() {
         return websocket;
     }
 
-    public Authentication getAuthentication() {
-        return authentication;
-    }
-
     @PostConstruct
     void validate() {
         websocket.validate();
-        authentication.validate();
     }
 
     public static class Websocket {
@@ -129,21 +123,4 @@ public class RealtimeProperties {
         }
     }
 
-    public static class Authentication {
-        private String provider = HttpPrincipalAuthenticationProvider.ID;
-
-        public String getProvider() {
-            return provider;
-        }
-
-        public void setProvider(String provider) {
-            this.provider = provider;
-        }
-
-        private void validate() {
-            if (provider == null || provider.isBlank()) {
-                throw new IllegalArgumentException("camunda.websocket.task-events.authentication.provider must be configured");
-            }
-        }
-    }
 }

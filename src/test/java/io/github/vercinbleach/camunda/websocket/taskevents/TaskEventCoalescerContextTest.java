@@ -12,20 +12,16 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 class TaskEventCoalescerContextTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
-            .withUserConfiguration(RealtimeConstructorConfiguration.class)
-            .withPropertyValues("camunda.websocket.task-events.authentication.provider=stomp-bearer-jwt");
+            .withUserConfiguration(RealtimeConstructorConfiguration.class);
     private final WebApplicationContextRunner fullContextRunner = new WebApplicationContextRunner()
-            .withUserConfiguration(FullRealtimeConfiguration.class, JwtDecoderConfiguration.class)
-            .withPropertyValues(
-                    "camunda.websocket.task-events.websocket.allowed-origins=http://localhost:3000",
-                    "camunda.websocket.task-events.authentication.provider=stomp-bearer-jwt");
+            .withUserConfiguration(FullRealtimeConfiguration.class)
+            .withPropertyValues("camunda.websocket.task-events.websocket.allowed-origins=http://localhost:3000");
 
     @Test
     void selectsProductionConstructorsInASpringContext() {
@@ -33,8 +29,6 @@ class TaskEventCoalescerContextTest {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(TaskEventCoalescer.class);
             assertThat(context).hasSingleBean(TaskEventBroadcaster.class);
-            assertThat(context).hasSingleBean(TaskRealtimeAuthenticationInterceptor.class);
-            assertThat(context).hasSingleBean(StompBearerJwtAuthenticationProvider.class);
         });
     }
 
@@ -44,23 +38,19 @@ class TaskEventCoalescerContextTest {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(TaskRealtimeWebSocketConfig.class);
             assertThat(context).hasSingleBean(TaskEventBroadcaster.class);
-            assertThat(context).hasSingleBean(TaskRealtimeAuthenticationInterceptor.class);
-            assertThat(context).hasSingleBean(StompBearerJwtAuthenticationProvider.class);
+            assertThat(context).hasSingleBean(TaskRealtimeHandshakeHandler.class);
+            assertThat(context).hasSingleBean(TaskRealtimeProtocolInterceptor.class);
         });
     }
 
     @Test
-    void createsHttpPrincipalModeWithoutAJwtDecoder() {
+    void createsAnonymousCapableModeWithoutSecurityConfiguration() {
         new WebApplicationContextRunner()
                 .withUserConfiguration(FullRealtimeConfiguration.class)
-                .withPropertyValues(
-                        "camunda.websocket.task-events.websocket.allowed-origins=http://localhost:3000",
-                        "camunda.websocket.task-events.authentication.provider=http-principal")
+                .withPropertyValues("camunda.websocket.task-events.websocket.allowed-origins=http://localhost:3000")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(context).hasSingleBean(HttpPrincipalAuthenticationProvider.class);
-                    assertThat(context).doesNotHaveBean(StompBearerJwtAuthenticationProvider.class);
-                    assertThat(context).doesNotHaveBean(JwtDecoder.class);
+                    assertThat(context).hasSingleBean(TaskRealtimeHandshakeHandler.class);
                 });
     }
 
@@ -80,10 +70,7 @@ class TaskEventCoalescerContextTest {
     @Import({
             TaskEventBroadcaster.class,
             TaskEventCoalescer.class,
-            TaskRealtimePublisherConfiguration.class,
-            TaskRealtimeAuthenticationInterceptor.class,
-            StompBearerJwtAuthenticationProvider.class,
-            HttpPrincipalAuthenticationProvider.class
+            TaskRealtimePublisherConfiguration.class
     })
     static class RealtimeConstructorConfiguration {
         @Bean
@@ -101,30 +88,12 @@ class TaskEventCoalescerContextTest {
             return mock(TaskRealtimeMetrics.class);
         }
 
-        @Bean
-        TaskSessionRegistry taskSessionRegistry() {
-            return mock(TaskSessionRegistry.class);
-        }
-
-        @Bean
-        JwtDecoder jwtDecoder() {
-            return mock(JwtDecoder.class);
-        }
-
-        @Bean
-        RealtimeProperties realtimeProperties() {
-            RealtimeProperties properties = new RealtimeProperties();
-            properties.getAuthentication().setProvider(StompBearerJwtAuthenticationProvider.ID);
-            return properties;
-        }
-
     }
 
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties(RealtimeProperties.class)
     @Import({
             TaskRealtimeWebSocketConfig.class,
-            TaskRealtimeChannelSecurityConfig.class,
             TaskEventBroadcaster.class,
             TaskEventCoalescer.class,
             TaskRealtimePublisherConfiguration.class,
@@ -133,23 +102,13 @@ class TaskEventCoalescerContextTest {
             TaskSessionRegistry.class,
             TaskSessionLimitsInterceptor.class,
             TaskWebSocketSessionTracker.class,
-            TaskRealtimeAuthenticationInterceptor.class,
-            StompBearerJwtAuthenticationProvider.class,
-            HttpPrincipalAuthenticationProvider.class,
-            TaskStompAuthorizationManager.class
+            TaskRealtimeHandshakeHandler.class,
+            TaskRealtimeProtocolInterceptor.class
     })
     static class FullRealtimeConfiguration {
         @Bean
         MeterRegistry meterRegistry() {
             return new SimpleMeterRegistry();
-        }
-    }
-
-    @Configuration(proxyBeanMethods = false)
-    static class JwtDecoderConfiguration {
-        @Bean
-        JwtDecoder jwtDecoder() {
-            return mock(JwtDecoder.class);
         }
     }
 }

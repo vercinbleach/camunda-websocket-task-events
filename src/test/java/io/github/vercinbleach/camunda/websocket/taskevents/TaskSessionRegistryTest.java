@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.WebSocketSession;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -32,20 +31,16 @@ class TaskSessionRegistryTest {
     }
 
     @Test
-    void enforcesOneSubscriptionAndClosesExpiredJwtSession() throws Exception {
+    void enforcesOneSubscriptionPerTransportSession() {
         RealtimeProperties properties = properties(1, 1);
         registry = new TaskSessionRegistry(properties);
         WebSocketSession session = session("session-1");
 
         assertThat(registry.registerTransportSession(session)).isTrue();
-        assertThat(registry.authenticate("session-1", Instant.now().plusMillis(250))).isTrue();
         assertThat(registry.registerSubscription("session-1", "sub-1", "/user/queue/task-events")).isTrue();
         assertThat(registry.registerSubscription("session-1", "sub-2", "/user/queue/task-events")).isFalse();
         assertThat(registry.getSubscriptionCount("session-1")).isEqualTo(1);
 
-        verify(session, org.mockito.Mockito.timeout(1000)).close(eq(CloseStatus.POLICY_VIOLATION));
-        assertThat(registry.getSessionCount()).isZero();
-        assertThat(registry.registerTransportSession(session("session-2"))).isTrue();
     }
 
     @Test
@@ -59,18 +54,6 @@ class TaskSessionRegistryTest {
         assertThat(registry.registerTransportSession(second)).isFalse();
 
         verify(second).close(eq(CloseStatus.SERVICE_OVERLOAD));
-    }
-
-    @Test
-    void acceptsAnAuthenticatedPrincipalWithoutAProviderManagedExpiry() {
-        RealtimeProperties properties = properties(1, 1);
-        registry = new TaskSessionRegistry(properties);
-        WebSocketSession session = session("session-1");
-
-        assertThat(registry.registerTransportSession(session)).isTrue();
-        assertThat(registry.authenticate("session-1", null)).isTrue();
-        assertThat(registry.authenticate("session-1", null)).isFalse();
-        assertThat(registry.getSessionCount()).isEqualTo(1);
     }
 
     @Test
@@ -129,24 +112,10 @@ class TaskSessionRegistryTest {
     }
 
     @Test
-    void rejectsSecondConnectAndKeepsTheOriginalExpiry() throws Exception {
-        RealtimeProperties properties = properties(1, 1);
-        registry = new TaskSessionRegistry(properties);
-        WebSocketSession session = session("session-1");
-
-        assertThat(registry.registerTransportSession(session)).isTrue();
-        assertThat(registry.authenticate("session-1", Instant.now().plusMillis(250))).isTrue();
-        assertThat(registry.authenticate("session-1", Instant.now().plusSeconds(30))).isFalse();
-
-        verify(session, org.mockito.Mockito.timeout(1000).times(1)).close(eq(CloseStatus.POLICY_VIOLATION));
-        assertThat(registry.getSessionCount()).isZero();
-    }
-
-    @Test
     void exposesSessionAndSubscriptionGaugesThroughMicrometer() {
         RealtimeProperties properties = properties(1, 1);
         SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
-        registry = new TaskSessionRegistry(properties, java.time.Clock.systemUTC(), meterRegistry);
+        registry = new TaskSessionRegistry(properties, meterRegistry);
 
         assertThat(meterRegistry.get("task_realtime_active_transports").gauge().value()).isZero();
         assertThat(meterRegistry.get("task_realtime_active_subscriptions").gauge().value()).isZero();

@@ -8,7 +8,7 @@
   <artifactId>camunda-websocket-task-events</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <name>Camunda WebSocket Task Events</name>
-  <description>Minimal authenticated STOMP task invalidations for Camunda 7 and Spring Boot.</description>
+  <description>Minimal STOMP task invalidations for Camunda 7 and Spring Boot.</description>
   <url>https://github.com/vercinbleach/camunda-websocket-task-events</url>
 
   <licenses>
@@ -67,20 +67,6 @@
       <artifactId>spring-boot-starter-websocket</artifactId>
     </dependency>
     <dependency>
-      <groupId>org.springframework.security</groupId>
-      <artifactId>spring-security-messaging</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.security</groupId>
-      <artifactId>spring-security-oauth2-jose</artifactId>
-      <optional>true</optional>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.security</groupId>
-      <artifactId>spring-security-oauth2-resource-server</artifactId>
-      <optional>true</optional>
-    </dependency>
-    <dependency>
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-core</artifactId>
     </dependency>
@@ -93,11 +79,6 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.security</groupId>
-      <artifactId>spring-security-test</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>

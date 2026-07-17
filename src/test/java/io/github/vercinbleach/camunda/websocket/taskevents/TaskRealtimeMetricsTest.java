@@ -12,14 +12,12 @@ class TaskRealtimeMetricsTest {
         TaskRealtimeMetrics metrics = new TaskRealtimeMetrics(registry);
 
         metrics.recordCommittedEvent();
-        metrics.recordRejectedAuthentication();
         metrics.recordRejectedSubscription();
         metrics.recordEnvelopeEmitted();
         metrics.recordDeliveryFailure();
         metrics.recordPublisherRejection();
 
         assertThat(registry.get("task_realtime_committed_events").counter().count()).isEqualTo(1);
-        assertThat(registry.get("task_realtime_rejected_authentications").counter().count()).isEqualTo(1);
         assertThat(registry.get("task_realtime_rejected_subscriptions").counter().count()).isEqualTo(1);
         assertThat(registry.get("task_realtime_emitted_envelopes").counter().count()).isEqualTo(1);
         assertThat(registry.get("task_realtime_delivery_failures").counter().count()).isEqualTo(1);

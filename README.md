@@ -1,7 +1,7 @@
 # Camunda WebSocket Task Events
 
-Authenticated, minimal task-list invalidations for Camunda 7 applications that
-run with Spring Boot. Add one Maven dependency; the library registers a native
+Minimal task-list invalidations for Camunda 7 applications that run with Spring
+Boot. Add one Maven dependency; the library registers a native
 WebSocket/STOMP endpoint and publishes an invalidation only after the Camunda
 transaction commits.
 
@@ -33,11 +33,11 @@ install it locally with `./mvnw install`.
 </dependency>
 ```
 
-For a normal Spring-authenticated Camunda application, no library-specific Java
-configuration is required. The defaults are:
+No authentication choice or library-specific Java configuration is required.
+The defaults are:
 
 - endpoint: `/ws/task-events`;
-- authentication: the `Principal` established by the HTTP handshake;
+- security: inherited from the HTTP WebSocket handshake;
 - origin policy: Spring's same-origin default;
 - subscription: `/user/queue/task-events`;
 - client `SEND`: denied;
@@ -45,9 +45,10 @@ configuration is required. The defaults are:
 - Camunda eventing: `camunda.bpm.eventing.skippable=false` supplied at low
   precedence and validated fail-closed.
 
-The application must authenticate the WebSocket handshake. An anonymous
-handshake can open the transport, but its STOMP `CONNECT` is rejected and
-cannot subscribe.
+If HTTP security established a `Principal`, Spring carries it into the
+WebSocket session. If the application permits anonymous access to the endpoint,
+the library creates an opaque, session-local routing principal so the private
+queue still works. That principal grants no Camunda or REST permissions.
 
 ## Browser client
 
@@ -79,51 +80,29 @@ The public envelope is intentionally small:
 {"schemaVersion":1,"type":"TASKS_INVALIDATED"}
 ```
 
-## Stateless JWT mode
+## Security inheritance
 
-Browsers cannot add an arbitrary `Authorization` header to the HTTP WebSocket
-upgrade. For stateless SPAs, the token can instead be sent as a native STOMP
-`CONNECT` header:
+The library contains no Basic, OAuth2, JWT, Keycloak or Camunda authentication
+provider. The application's existing HTTP filters decide whether the handshake
+to `/ws/task-events` is allowed. Any mechanism that exposes a
+`HttpServletRequest` principal is inherited automatically by Spring WebSocket.
 
-```yaml
-camunda:
-  websocket:
-    task-events:
-      authentication:
-        provider: stomp-bearer-jwt
-```
+Camunda's REST `AuthenticationProvider` is deliberately not copied or invoked.
+It belongs to `ProcessEngineAuthenticationFilter`, authenticates an engine REST
+request and clears the engine identity after that request. It is not a global
+authentication manager for other transports.
 
-This mode reuses the application's Spring Security `JwtDecoder`, including
-whatever signature, issuer, audience or custom claim validators the application
-configured. It also reuses an
-application `JwtAuthenticationConverter` bean when one is available; otherwise
-Spring Security's standard converter is used (`sub` is the principal claim).
-There is no second JWT configuration inside this library.
+This follows [Spring WebSocket authentication](https://docs.spring.io/spring-framework/reference/web/websocket/stomp/authentication.html),
+which transfers the HTTP request principal to the WebSocket session. The REST
+boundary can be seen directly in Camunda 7's
+[`ProcessEngineAuthenticationFilter`](https://github.com/camunda/camunda-bpm-platform/blob/7.24.0/engine-rest/engine-rest/src/main/java/org/camunda/bpm/engine/rest/security/auth/ProcessEngineAuthenticationFilter.java).
 
-Applications that use another principal claim should expose the same converter
-used by their HTTP resource server:
-
-```java
-@Bean
-JwtAuthenticationConverter jwtAuthenticationConverter() {
-  JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
-  converter.setPrincipalClaimName("preferred_username");
-  return converter;
-}
-```
-
-The client must set a fresh token for every connection:
-
-```ts
-client.beforeConnect = async () => {
-  client.connectHeaders = {
-    Authorization: `Bearer ${await currentAccessToken()}`,
-  };
-};
-```
-
-The application decoder remains the single authority for JWT validation. The
-library requires `exp` so it can close the WebSocket when the token expires.
+For browser-based stateless OAuth2, an application may allow the WebSocket
+handshake without credentials. The notification contains no task or business
+data and every reload still goes through the application's existing REST
+security. Applications that consider workflow activity timing sensitive should
+protect the handshake endpoint. The extension never interprets STOMP
+`Authorization`, `login` or `passcode` headers.
 
 ## Configuration
 
@@ -147,42 +126,12 @@ camunda:
 Origins are exact values. Wildcards are rejected. Leaving the list empty keeps
 Spring's same-origin behavior.
 
-## Custom authentication
-
-Implement one bean when neither built-in provider matches the application's
-security model:
-
-```java
-@Component
-class MyRealtimeAuthenticationProvider
-        implements TaskRealtimeAuthenticationProvider {
-
-  @Override
-  public String id() {
-    return "my-provider";
-  }
-
-  @Override
-  public TaskRealtimeAuthentication authenticate(
-          StompHeaderAccessor connectHeaders) {
-    // Validate credentials and return a normalized Spring Authentication.
-  }
-}
-```
-
-```yaml
-camunda.websocket.task-events.authentication.provider: my-provider
-```
-
-Exactly one bean must match the configured ID. Missing or duplicate providers
-fail startup; the library never falls back to another authentication mechanism.
-
 ## Semantics
 
 Camunda task events may be raised before the surrounding transaction commits.
 This library consumes the Spring event with
 `@TransactionalEventListener(AFTER_COMMIT)`, then coalesces bursts on a bounded
-executor before broadcasting the invalidation to authenticated users.
+executor before broadcasting the invalidation to connected private sessions.
 
 Consequences:
 
@@ -196,7 +145,7 @@ Consequences:
 
 When Micrometer is available, the library registers counters and gauges with
 the `task_realtime_` prefix for committed events, emitted envelopes, rejected
-authentication/subscriptions, delivery failures, publisher rejection, active
+subscriptions, delivery failures, publisher rejection, active
 transports and active subscriptions.
 
 ## Build

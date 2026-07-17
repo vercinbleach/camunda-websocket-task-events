@@ -6,8 +6,6 @@ import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
-import org.springframework.security.messaging.access.intercept.AuthorizationChannelInterceptor;
-import org.springframework.security.messaging.context.SecurityContextChannelInterceptor;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
@@ -17,23 +15,20 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
 @EnableWebSocketMessageBroker
 public class TaskRealtimeWebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final RealtimeProperties properties;
-    private final TaskRealtimeAuthenticationInterceptor authenticationInterceptor;
-    private final SecurityContextChannelInterceptor securityContextInterceptor;
-    private final AuthorizationChannelInterceptor authorizationInterceptor;
+    private final TaskRealtimeHandshakeHandler handshakeHandler;
+    private final TaskRealtimeProtocolInterceptor protocolInterceptor;
     private final TaskSessionLimitsInterceptor sessionLimitsInterceptor;
     private final TaskWebSocketSessionTracker sessionTracker;
 
     public TaskRealtimeWebSocketConfig(
             RealtimeProperties properties,
-            TaskRealtimeAuthenticationInterceptor authenticationInterceptor,
-            SecurityContextChannelInterceptor securityContextInterceptor,
-            AuthorizationChannelInterceptor authorizationInterceptor,
+            TaskRealtimeHandshakeHandler handshakeHandler,
+            TaskRealtimeProtocolInterceptor protocolInterceptor,
             TaskSessionLimitsInterceptor sessionLimitsInterceptor,
             TaskWebSocketSessionTracker sessionTracker) {
         this.properties = properties;
-        this.authenticationInterceptor = authenticationInterceptor;
-        this.securityContextInterceptor = securityContextInterceptor;
-        this.authorizationInterceptor = authorizationInterceptor;
+        this.handshakeHandler = handshakeHandler;
+        this.protocolInterceptor = protocolInterceptor;
         this.sessionLimitsInterceptor = sessionLimitsInterceptor;
         this.sessionTracker = sessionTracker;
     }
@@ -51,7 +46,8 @@ public class TaskRealtimeWebSocketConfig implements WebSocketMessageBrokerConfig
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        var endpoint = registry.addEndpoint(properties.getWebsocket().getEndpoint());
+        var endpoint = registry.addEndpoint(properties.getWebsocket().getEndpoint())
+                .setHandshakeHandler(handshakeHandler);
         if (!properties.getWebsocket().getAllowedOrigins().isEmpty()) {
             endpoint.setAllowedOrigins(properties.getWebsocket().getAllowedOrigins().toArray(String[]::new));
         }
@@ -60,9 +56,7 @@ public class TaskRealtimeWebSocketConfig implements WebSocketMessageBrokerConfig
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
         registration.interceptors(
-                authenticationInterceptor,
-                securityContextInterceptor,
-                authorizationInterceptor,
+                protocolInterceptor,
                 sessionLimitsInterceptor);
     }
 

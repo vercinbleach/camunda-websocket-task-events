@@ -12,13 +12,12 @@ class CamundaWebSocketTaskEventsAutoConfigurationTest {
             .withPropertyValues("camunda.bpm.eventing.skippable=false");
 
     @Test
-    void configuresTheEndpointWithTheDefaultHttpPrincipalProvider() {
+    void configuresTheEndpointWithoutAnAuthenticationProvider() {
         contextRunner.run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(TaskRealtimeWebSocketConfig.class);
-            assertThat(context).hasSingleBean(TaskRealtimeAuthenticationInterceptor.class);
-            assertThat(context).hasSingleBean(HttpPrincipalAuthenticationProvider.class);
-            assertThat(context).doesNotHaveBean(StompBearerJwtAuthenticationProvider.class);
+            assertThat(context).hasSingleBean(TaskRealtimeHandshakeHandler.class);
+            assertThat(context).hasSingleBean(TaskRealtimeProtocolInterceptor.class);
             assertThat(context.getBean(RealtimeProperties.class).getWebsocket().getEndpoint())
                     .isEqualTo("/ws/task-events");
         });

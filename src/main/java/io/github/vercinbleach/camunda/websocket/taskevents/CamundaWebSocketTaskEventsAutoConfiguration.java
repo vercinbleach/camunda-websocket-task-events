@@ -14,19 +14,16 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 @Import({
         CamundaEventingConfigurationValidator.class,
         CamundaTaskEventListener.class,
-        HttpPrincipalAuthenticationProvider.class,
-        StompBearerJwtAuthenticationProvider.class,
         TaskEventBroadcaster.class,
         TaskEventCoalescer.class,
         TaskEventPublicationService.class,
-        TaskRealtimeAuthenticationInterceptor.class,
-        TaskRealtimeChannelSecurityConfig.class,
+        TaskRealtimeHandshakeHandler.class,
         TaskRealtimeMetrics.class,
+        TaskRealtimeProtocolInterceptor.class,
         TaskRealtimePublisherConfiguration.class,
         TaskRealtimeWebSocketConfig.class,
         TaskSessionLimitsInterceptor.class,
         TaskSessionRegistry.class,
-        TaskStompAuthorizationManager.class,
         TaskWebSocketSessionTracker.class
 })
 public class CamundaWebSocketTaskEventsAutoConfiguration {
