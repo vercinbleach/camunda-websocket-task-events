@@ -37,7 +37,7 @@ No authentication choice or library-specific Java configuration is required.
 The defaults are:
 
 - endpoint: `/ws/task-events`;
-- security: inherited from the HTTP WebSocket handshake;
+- security: automatically inherited from Spring Security or Camunda REST;
 - origin policy: Spring's same-origin default;
 - subscription: `/user/queue/task-events`;
 - client `SEND`: denied;
@@ -46,9 +46,12 @@ The defaults are:
   precedence and validated fail-closed.
 
 If HTTP security established a `Principal`, Spring carries it into the
-WebSocket session. If the application permits anonymous access to the endpoint,
-the library creates an opaque, session-local routing principal so the private
-queue still works. That principal grants no Camunda or REST permissions.
+WebSocket session. Stateless browser clients can instead send their existing
+bearer token in STOMP `CONNECT`; the library delegates validation to the
+application's existing Spring Security beans. If the application deliberately
+permits anonymous access, the library creates an opaque, session-local routing
+principal so the private queue still works. That principal grants no Camunda or
+REST permissions.
 
 ## Browser client
 
@@ -59,6 +62,8 @@ import { Client } from '@stomp/stompjs';
 
 const client = new Client({
   brokerURL: 'wss://example.com/ws/task-events',
+  // Omit connectHeaders for session-based or deliberately anonymous setups.
+  connectHeaders: { Authorization: `Bearer ${accessToken}` },
   reconnectDelay: 1000,
   heartbeatIncoming: 10000,
   heartbeatOutgoing: 10000,
@@ -80,29 +85,56 @@ The public envelope is intentionally small:
 {"schemaVersion":1,"type":"TASKS_INVALIDATED"}
 ```
 
-## Security inheritance
+## Zero-configuration security
 
-The library contains no Basic, OAuth2, JWT, Keycloak or Camunda authentication
-provider. The application's existing HTTP filters decide whether the handshake
-to `/ws/task-events` is allowed. Any mechanism that exposes a
-`HttpServletRequest` principal is inherited automatically by Spring WebSocket.
+There is no `authentication.provider` property and the library does not contain
+Keycloak-, issuer-, audience- or claim-specific configuration. It discovers and
+reuses the security mechanism already configured by the application:
 
-Camunda's REST `AuthenticationProvider` is deliberately not copied or invoked.
-It belongs to `ProcessEngineAuthenticationFilter`, authenticates an engine REST
-request and clears the engine identity after that request. It is not a global
-authentication manager for other transports.
+| Existing application setup | Reused automatically |
+| --- | --- |
+| HTTP session, form login, Basic or OAuth2 login | Handshake `Principal` |
+| Spring Resource Server JWT | `JwtDecoder` and an exposed `JwtAuthenticationConverter` bean |
+| Spring Resource Server opaque token | `OpaqueTokenIntrospector` and an exposed converter bean |
+| Camunda REST auth | `AuthenticationProvider` bean or the provider class registered on `ProcessEngineAuthenticationFilter` |
+| No authentication | Ephemeral routing-only principal |
 
-This follows [Spring WebSocket authentication](https://docs.spring.io/spring-framework/reference/web/websocket/stomp/authentication.html),
-which transfers the HTTP request principal to the WebSocket session. The REST
-boundary can be seen directly in Camunda 7's
+Spring's normal WebSocket behavior transfers an HTTP principal to the session,
+but browsers cannot add arbitrary HTTP headers to the WebSocket handshake and
+Spring intentionally ignores STOMP authentication headers by default. The
+resource-server adapters therefore process bearer credentials from `CONNECT`
+through the same decoder, validators and exposed converter as the REST
+application. The standard Spring converter is used when the application did not
+expose one. Token expiry closes the WebSocket session.
+
+The Camunda adapter is used only when the HTTP handshake itself carries an
+`Authorization` header and Spring has not already established a principal. It
+supports both a unique `AuthenticationProvider` bean and the standard
+`authentication-provider` init parameter used by Camunda's REST filter. A
+unique/default `ProcessEngine` is required because a WebSocket URL does not
+address an engine name.
+
+Credentials are fail-closed: invalid or unsupported credentials are rejected;
+the library never retries through another mechanism and never downgrades them
+to anonymous. If JWT and opaque-token support are both present without a
+higher-priority custom `TaskRealtimeCredentialAuthenticator`, bearer
+authentication is rejected as ambiguous instead of guessing the token format.
+
+For a genuinely custom mechanism, expose one ordered
+`TaskRealtimeCredentialAuthenticator` bean for STOMP credentials or one
+`TaskRealtimeHandshakeAuthenticator` bean for HTTP-handshake credentials. The
+standard cases require no such bean. When several mechanisms support the same
+credential, the custom implementation must override `Ordered#getOrder()` with a
+lower value to override the broad Camunda REST or resource-server adapter.
+
+This design follows [Spring WebSocket authentication](https://docs.spring.io/spring-framework/reference/web/websocket/stomp/authentication.html),
+[Spring token authentication for STOMP](https://docs.spring.io/spring-framework/reference/web/websocket/stomp/authentication-token-based.html),
+and Spring Security's
+[`AuthenticationManager` architecture](https://docs.spring.io/spring-security/reference/servlet/authentication/architecture.html).
+Camunda's integration point is the official
+[`AuthenticationProvider`](https://github.com/camunda/camunda-bpm-platform/blob/7.24.0/engine-rest/engine-rest/src/main/java/org/camunda/bpm/engine/rest/security/auth/AuthenticationProvider.java)
+configured by
 [`ProcessEngineAuthenticationFilter`](https://github.com/camunda/camunda-bpm-platform/blob/7.24.0/engine-rest/engine-rest/src/main/java/org/camunda/bpm/engine/rest/security/auth/ProcessEngineAuthenticationFilter.java).
-
-For browser-based stateless OAuth2, an application may allow the WebSocket
-handshake without credentials. The notification contains no task or business
-data and every reload still goes through the application's existing REST
-security. Applications that consider workflow activity timing sensitive should
-protect the handshake endpoint. The extension never interprets STOMP
-`Authorization`, `login` or `passcode` headers.
 
 ## Configuration
 
@@ -145,7 +177,7 @@ Consequences:
 
 When Micrometer is available, the library registers counters and gauges with
 the `task_realtime_` prefix for committed events, emitted envelopes, rejected
-subscriptions, delivery failures, publisher rejection, active
+subscriptions, rejected authentication, delivery failures, publisher rejection, active
 transports and active subscriptions.
 
 ## Build

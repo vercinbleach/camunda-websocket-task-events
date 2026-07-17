@@ -22,6 +22,12 @@ public class TaskRealtimeHandshakeHandler extends DefaultHandshakeHandler {
         if (principal != null && principal.getName() != null && !principal.getName().isBlank()) {
             return principal;
         }
+        Object authenticated = attributes.get(TaskRealtimeHandshakeInterceptor.AUTHENTICATED_PRINCIPAL_ATTRIBUTE);
+        if (authenticated instanceof Principal authenticatedPrincipal
+                && authenticatedPrincipal.getName() != null
+                && !authenticatedPrincipal.getName().isBlank()) {
+            return authenticatedPrincipal;
+        }
         return () -> ANONYMOUS_PREFIX + UUID.randomUUID();
     }
 }

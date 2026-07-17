@@ -13,6 +13,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.time.Instant;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -119,6 +122,20 @@ class TaskSessionRegistryTest {
 
         assertThat(meterRegistry.get("task_realtime_active_transports").gauge().value()).isZero();
         assertThat(meterRegistry.get("task_realtime_active_subscriptions").gauge().value()).isZero();
+    }
+
+    @Test
+    void removesCanceledCredentialExpiryTasksFromTheSchedulerQueue() {
+        registry = new TaskSessionRegistry(properties(1, 1));
+        assertThat(registry.registerTransportSession(session("session-1"))).isTrue();
+        assertThat(registry.bindCredentialExpiry("session-1", Instant.now().plusSeconds(3600))).isTrue();
+
+        registry.remove("session-1");
+
+        ScheduledThreadPoolExecutor scheduler = (ScheduledThreadPoolExecutor)
+                ReflectionTestUtils.getField(registry, "scheduler");
+        assertThat(scheduler).isNotNull();
+        assertThat(scheduler.getQueue()).isEmpty();
     }
 
     private RealtimeProperties properties(int maxSessions, int maxSubscriptions) {

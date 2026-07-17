@@ -1,1 +1,5 @@
 io.github.vercinbleach.camunda.websocket.taskevents.CamundaWebSocketTaskEventsAutoConfiguration
+io.github.vercinbleach.camunda.websocket.taskevents.CamundaRestAuthenticationTaskEventsAutoConfiguration
+io.github.vercinbleach.camunda.websocket.taskevents.SpringJwtTaskEventsAutoConfiguration
+io.github.vercinbleach.camunda.websocket.taskevents.SpringOpaqueTokenTaskEventsAutoConfiguration
+io.github.vercinbleach.camunda.websocket.taskevents.SpringSecurityPrincipalTaskEventsAutoConfiguration

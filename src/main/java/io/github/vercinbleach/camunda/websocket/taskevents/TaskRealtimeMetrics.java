@@ -14,6 +14,7 @@ public class TaskRealtimeMetrics {
     private final Counter emittedEnvelopes;
     private final Counter deliveryFailures;
     private final Counter publisherRejections;
+    private final Counter rejectedAuthentications;
 
     public TaskRealtimeMetrics() {
         this(new SimpleMeterRegistry());
@@ -30,6 +31,7 @@ public class TaskRealtimeMetrics {
         emittedEnvelopes = counter(registry, "task_realtime_emitted_envelopes");
         deliveryFailures = counter(registry, "task_realtime_delivery_failures");
         publisherRejections = counter(registry, "task_realtime_publisher_rejections");
+        rejectedAuthentications = counter(registry, "task_realtime_rejected_authentications");
 
     }
 
@@ -53,6 +55,10 @@ public class TaskRealtimeMetrics {
         publisherRejections.increment();
     }
 
+    public void recordRejectedAuthentication() {
+        rejectedAuthentications.increment();
+    }
+
     public long getCommittedEvents() {
         return (long) committedEvents.count();
     }
@@ -71,6 +77,10 @@ public class TaskRealtimeMetrics {
 
     public long getPublisherRejections() {
         return (long) publisherRejections.count();
+    }
+
+    public long getRejectedAuthentications() {
+        return (long) rejectedAuthentications.count();
     }
 
     private Counter counter(MeterRegistry registry, String name) {

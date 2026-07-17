@@ -36,4 +36,15 @@ class TaskRealtimeHandshakeHandlerTest {
         assertThat(second.getName()).startsWith("task-events-session:");
         assertThat(first.getName()).isNotEqualTo(second.getName());
     }
+
+    @Test
+    void usesThePrincipalAuthenticatedByAHandshakeAdapter() {
+        ServerHttpRequest request = mock(ServerHttpRequest.class);
+        Principal authenticated = () -> "camunda-basic-user";
+        HashMap<String, Object> attributes = new HashMap<>();
+        attributes.put(TaskRealtimeHandshakeInterceptor.AUTHENTICATED_PRINCIPAL_ATTRIBUTE, authenticated);
+
+        assertThat(handshakeHandler.determineUser(request, webSocketHandler, attributes))
+                .isSameAs(authenticated);
+    }
 }
