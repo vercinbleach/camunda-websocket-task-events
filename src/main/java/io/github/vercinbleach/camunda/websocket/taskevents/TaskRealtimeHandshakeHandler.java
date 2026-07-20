@@ -13,6 +13,10 @@ import java.util.UUID;
 public class TaskRealtimeHandshakeHandler extends DefaultHandshakeHandler {
     private static final String ANONYMOUS_PREFIX = "task-events-session:";
 
+    static boolean isRoutingOnlyPrincipal(Principal principal) {
+        return principal instanceof RoutingOnlyPrincipal;
+    }
+
     @Override
     protected Principal determineUser(
             ServerHttpRequest request,
@@ -28,6 +32,19 @@ public class TaskRealtimeHandshakeHandler extends DefaultHandshakeHandler {
                 && !authenticatedPrincipal.getName().isBlank()) {
             return authenticatedPrincipal;
         }
-        return () -> ANONYMOUS_PREFIX + UUID.randomUUID();
+        return new RoutingOnlyPrincipal(ANONYMOUS_PREFIX + UUID.randomUUID());
+    }
+
+    static final class RoutingOnlyPrincipal implements Principal {
+        private final String name;
+
+        RoutingOnlyPrincipal(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
     }
 }

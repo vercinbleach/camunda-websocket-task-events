@@ -1,5 +1,11 @@
 package io.github.vercinbleach.camunda.websocket.taskevents;
 
+import org.camunda.bpm.engine.IdentityService;
+import org.camunda.bpm.engine.ProcessEngine;
+import org.camunda.bpm.engine.TaskService;
+import org.camunda.bpm.engine.task.TaskQuery;
+import org.camunda.bpm.engine.task.Task;
+import org.camunda.bpm.engine.impl.identity.Authentication;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,6 +15,9 @@ import org.springframework.messaging.simp.user.SimpUserRegistry;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
 
 @Component
 public class TaskEventBroadcaster {
@@ -18,40 +27,77 @@ public class TaskEventBroadcaster {
 
     private final SimpMessagingTemplate messagingTemplate;
     private final SimpUserRegistry userRegistry;
+    private final IdentityService identityService;
+    private final TaskService taskService;
+    private final boolean authorizationEnabled;
     private final TaskRealtimeMetrics metrics;
 
     @Autowired
     public TaskEventBroadcaster(SimpMessagingTemplate messagingTemplate,
                                 SimpUserRegistry userRegistry,
+                                IdentityService identityService,
+                                TaskService taskService,
+                                ProcessEngine processEngine,
                                 TaskRealtimeMetrics metrics) {
         this.messagingTemplate = messagingTemplate;
         this.userRegistry = userRegistry;
+        this.identityService = identityService;
+        this.taskService = taskService;
+        this.authorizationEnabled = processEngine.getProcessEngineConfiguration()
+                .isAuthorizationEnabled();
         this.metrics = metrics;
     }
 
-    public void publish() {
-        Set<SimpUser> users;
-        try {
-            users = userRegistry.getUsers();
-        } catch (RuntimeException exception) {
-            logger.warn("Realtime user registry unavailable without payload details");
-            return;
+    public TaskRealtimePublication capturePublication(TaskRealtimeEnvelope envelope) {
+        return TaskRealtimePublication.withoutCapturedRecipients(envelope);
+    }
+
+    public TaskRealtimePublication finalizePublicationAfterCommit(TaskRealtimePublication publication) {
+        TaskRealtimeEnvelope envelope = publication.envelope();
+        if (envelope.requiresPostCommitVisibilityCapture()) {
+            return captureVisibleRecipients(envelope);
         }
+        // Terminal events have no active task to authorize after commit, so only invalidation is emitted.
+        return publication;
+    }
+
+    private TaskRealtimePublication captureVisibleRecipients(TaskRealtimeEnvelope envelope) {
+        Set<String> visibleRecipients = new LinkedHashSet<>();
+        for (SimpUser user : connectedUsers()) {
+            if (isEligibleRecipient(user) && canReadCommittedTask(user.getName(), envelope)) {
+                visibleRecipients.add(user.getName());
+            }
+        }
+        return new TaskRealtimePublication(envelope, visibleRecipients);
+    }
+
+    public void publish(TaskRealtimePublication publication) {
+        TaskRealtimeEnvelope envelope = publication.envelope();
+        Set<SimpUser> users = connectedUsers();
         if (users == null || users.isEmpty()) {
             return;
         }
 
-        TaskRealtimeEnvelope envelope = new TaskRealtimeEnvelope(
-                TaskRealtimeEnvelope.CURRENT_SCHEMA_VERSION,
-                TaskEventType.TASKS_INVALIDATED);
-
         int attempted = 0;
+        TaskRealtimeEnvelope accessInvalidation = envelope.requiresVisibilityReconciliation()
+                ? TaskRealtimeEnvelope.accessInvalidated()
+                : null;
         for (SimpUser user : users) {
-            if (user == null || user.getName() == null || user.getName().isBlank()) {
+            if (!isEligibleRecipient(user)) {
+                continue;
+            }
+            boolean canRead = publication.visibleRecipientsBeforeCommit().contains(user.getName());
+            TaskRealtimeEnvelope outboundEnvelope = canRead
+                    ? envelope
+                    : accessInvalidation;
+            if (outboundEnvelope == null) {
                 continue;
             }
             try {
-                messagingTemplate.convertAndSendToUser(user.getName(), USER_QUEUE_DESTINATION, envelope);
+                messagingTemplate.convertAndSendToUser(
+                        user.getName(),
+                        USER_QUEUE_DESTINATION,
+                        outboundEnvelope);
                 attempted++;
             } catch (RuntimeException exception) {
                 metrics.recordDeliveryFailure();
@@ -61,6 +107,75 @@ public class TaskEventBroadcaster {
         if (attempted > 0) {
             metrics.recordEnvelopeEmitted();
         }
-        logger.debug("Realtime invalidation attempted recipients={}", attempted);
+        logger.debug("Realtime task event attempted recipients={}", attempted);
+    }
+
+    public void publish(TaskRealtimeEnvelope envelope) {
+        TaskRealtimePublication publication = capturePublication(envelope);
+        publish(finalizePublicationAfterCommit(publication));
+    }
+
+    private Set<SimpUser> connectedUsers() {
+        try {
+            Set<SimpUser> users = userRegistry.getUsers();
+            return users == null ? Set.of() : users;
+        } catch (RuntimeException exception) {
+            logger.warn("Realtime user registry unavailable without payload details");
+            return Set.of();
+        }
+    }
+
+    private boolean isEligibleRecipient(SimpUser user) {
+        return user != null
+                && user.getName() != null
+                && !user.getName().isBlank()
+                && !TaskRealtimeHandshakeHandler.isRoutingOnlyPrincipal(user.getPrincipal());
+    }
+
+    private boolean canReadCommittedTask(String userId, TaskRealtimeEnvelope envelope) {
+        Authentication previousAuthentication = identityService.getCurrentAuthentication();
+        try {
+            identityService.clearAuthentication();
+            List<String> groupIds = identityService.createGroupQuery()
+                    .groupMember(userId)
+                    .list()
+                    .stream()
+                    .map(group -> group.getId())
+                    .toList();
+            List<String> tenantIds = identityService.createTenantQuery()
+                    .userMember(userId)
+                    .includingGroupsOfUser(true)
+                    .list()
+                    .stream()
+                    .map(tenant -> tenant.getId())
+                    .toList();
+            identityService.setAuthentication(userId, groupIds, tenantIds);
+            TaskQuery query = taskService.createTaskQuery().taskId(envelope.taskId());
+            if (!authorizationEnabled) {
+                // The task UI remains membership-scoped even when Camunda REST is globally readable.
+                query.or()
+                        .taskAssignee(userId)
+                        .taskCandidateUser(userId)
+                        .endOr();
+            }
+            if (query.count() == 0) {
+                return false;
+            }
+            if (envelope.eventType() != TaskLifecycleEvent.ASSIGNMENT) {
+                return true;
+            }
+            Task committedTask = query.singleResult();
+            return committedTask != null
+                    && Objects.equals(envelope.assignee(), committedTask.getAssignee());
+        } catch (RuntimeException exception) {
+            logger.warn("Could not verify realtime task visibility without user or payload details");
+            return false;
+        } finally {
+            if (previousAuthentication == null) {
+                identityService.clearAuthentication();
+            } else {
+                identityService.setAuthentication(previousAuthentication);
+            }
+        }
     }
 }

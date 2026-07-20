@@ -78,7 +78,12 @@ class StatelessJwtStompEndToEndTest {
         messagingTemplate.convertAndSendToUser(
                 "demo",
                 TaskEventBroadcaster.USER_QUEUE_DESTINATION,
-                new TaskRealtimeEnvelope(1, TaskEventType.TASKS_INVALIDATED));
+                new TaskRealtimeEnvelope(
+                        2,
+                        TaskEventType.TASK_EVENT,
+                        "task-123",
+                        TaskLifecycleEvent.UPDATE,
+                        null));
 
         assertThat(received.await(5, TimeUnit.SECONDS)).isTrue();
         session.disconnect();

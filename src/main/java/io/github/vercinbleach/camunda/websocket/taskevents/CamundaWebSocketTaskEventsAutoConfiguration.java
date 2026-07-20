@@ -15,7 +15,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
         CamundaEventingConfigurationValidator.class,
         CamundaTaskEventListener.class,
         TaskEventBroadcaster.class,
-        TaskEventCoalescer.class,
+        TaskEventDispatcher.class,
         TaskEventPublicationService.class,
         TaskRealtimeHandshakeHandler.class,
         TaskRealtimeMetrics.class,

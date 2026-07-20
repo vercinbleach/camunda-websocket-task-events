@@ -1,13 +1,29 @@
 # Camunda WebSocket Task Events
 
-Minimal task-list invalidations for Camunda 7 applications that run with Spring
+Minimal task lifecycle events for Camunda 7 applications that run with Spring
 Boot. Add one Maven dependency; the library registers a native
-WebSocket/STOMP endpoint and publishes an invalidation only after the Camunda
+WebSocket/STOMP endpoint and publishes each event only after the Camunda
 transaction commits.
 
-The WebSocket never becomes a second task API. It carries no task IDs,
-variables, assignees or business data. Clients receive an invalidation and
-reload authorized state from Camunda REST.
+The WebSocket never becomes a second task API. It carries only the task ID,
+event type and optional assignee needed for targeted UI reconciliation. It does
+not carry task names, variables or other business data. Clients reload the
+authorized task state from Camunda REST.
+
+Task metadata is sent only when Camunda confirms the recipient's effective
+visibility using that user's groups and tenants. `create`, `assignment` and
+`update` resolve recipients after commit inside the ordered dispatcher; only `assignment`
+carries an assignee, and it must still match the committed task. Terminal events
+(`complete`, `delete`, `timeout`) emit only payload-free invalidation because the
+active task no longer exists to authorize. Other authenticated principals receive
+only a payload-free `TASKS_INVALIDATED`
+signal when they may need to reconcile from REST. Anonymous routing-only
+sessions receive nothing.
+
+When Camunda engine authorization is disabled, the technical REST API is
+globally readable. Realtime intentionally remains scoped to assignees and
+candidates so it matches the task application's operational list instead of
+broadcasting task metadata to every authenticated session.
 
 ## Status
 
@@ -70,8 +86,13 @@ const client = new Client({
 });
 
 client.onConnect = () => {
-  client.subscribe('/user/queue/task-events', () => {
-    void reloadTasksFromRest();
+  client.subscribe('/user/queue/task-events', (message) => {
+    const event = JSON.parse(message.body);
+    if (event.type === 'TASKS_INVALIDATED') {
+      void reloadTasksFromRest();
+    } else {
+      void reconcileTaskFromRest(event.taskId, event.eventType);
+    }
   });
   void reloadTasksFromRest();
 };
@@ -82,8 +103,17 @@ client.activate();
 The public envelope is intentionally small:
 
 ```json
-{"schemaVersion":1,"type":"TASKS_INVALIDATED"}
+{"schemaVersion":2,"type":"TASK_EVENT","taskId":"a-task-id","eventType":"assignment","assignee":"demo"}
 ```
+
+Access-loss reconciliation never exposes task metadata:
+
+```json
+{"schemaVersion":2,"type":"TASKS_INVALIDATED"}
+```
+
+`eventType` is one of `create`, `assignment`, `update`, `complete`, `delete`
+or `timeout`. `assignee` is omitted when Camunda's committed event has none.
 
 ## Zero-configuration security
 
@@ -161,13 +191,17 @@ Spring's same-origin behavior.
 ## Semantics
 
 Camunda task events may be raised before the surrounding transaction commits.
-This library consumes the Spring event with
-`@TransactionalEventListener(AFTER_COMMIT)`, then coalesces bursts on a bounded
-executor before broadcasting the invalidation to connected private sessions.
+This library consumes the Spring event synchronously only to capture immutable
+technical metadata. The internal event is observed with
+`@TransactionalEventListener(AFTER_COMMIT)` and visibility queries run on a bounded
+single-thread executor to preserve ordering without blocking the Camunda
+command.
 
 Consequences:
 
-- rollback produces no public invalidation;
+- rollback produces no public event;
+- committed task events preserve their identity and order;
+- unrelated principals cannot observe task identifiers or assignees;
 - realtime failure never rolls back a Camunda command;
 - delivery is not durable and has no replay;
 - reconnect always triggers a REST reconciliation;
