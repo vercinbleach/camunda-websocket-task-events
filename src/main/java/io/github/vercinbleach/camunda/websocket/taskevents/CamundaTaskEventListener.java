@@ -14,12 +14,15 @@ public class CamundaTaskEventListener {
     private static final Logger logger = LoggerFactory.getLogger(CamundaTaskEventListener.class);
 
     private final TaskEventPublicationService publicationService;
+    private final TaskEventBroadcaster broadcaster;
     private final ApplicationEventPublisher eventPublisher;
 
     public CamundaTaskEventListener(
             TaskEventPublicationService publicationService,
+            TaskEventBroadcaster broadcaster,
             ApplicationEventPublisher eventPublisher) {
         this.publicationService = publicationService;
+        this.broadcaster = broadcaster;
         this.eventPublisher = eventPublisher;
     }
 
@@ -27,7 +30,7 @@ public class CamundaTaskEventListener {
     public void captureTaskEvent(TaskEvent taskEvent) {
         try {
             TaskRealtimeEnvelope.from(taskEvent)
-                    .map(TaskRealtimePublication::withoutCapturedRecipients)
+                    .map(envelope -> broadcaster.capturePublication(envelope, taskEvent.getAssignee()))
                     .ifPresent(eventPublisher::publishEvent);
         } catch (RuntimeException exception) {
             logger.warn("Could not capture realtime task event without task or token details");

@@ -4,7 +4,6 @@ import org.camunda.bpm.engine.IdentityService;
 import org.camunda.bpm.engine.ProcessEngine;
 import org.camunda.bpm.engine.TaskService;
 import org.camunda.bpm.engine.task.TaskQuery;
-import org.camunda.bpm.engine.task.Task;
 import org.camunda.bpm.engine.impl.identity.Authentication;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +16,6 @@ import org.springframework.stereotype.Component;
 import java.util.Set;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Objects;
 
 @Component
 public class TaskEventBroadcaster {
@@ -49,26 +47,35 @@ public class TaskEventBroadcaster {
     }
 
     public TaskRealtimePublication capturePublication(TaskRealtimeEnvelope envelope) {
-        return TaskRealtimePublication.withoutCapturedRecipients(envelope);
+        return capturePublication(envelope, null);
+    }
+
+    public TaskRealtimePublication capturePublication(TaskRealtimeEnvelope envelope, String assignee) {
+        String authorizedRemoveAssignee = envelope.isRemove()
+                && assignee != null
+                && !assignee.isBlank()
+                && canReadTask(assignee, envelope)
+                ? assignee
+                : null;
+        return TaskRealtimePublication.capture(envelope, authorizedRemoveAssignee);
     }
 
     public TaskRealtimePublication finalizePublicationAfterCommit(TaskRealtimePublication publication) {
         TaskRealtimeEnvelope envelope = publication.envelope();
         if (envelope.requiresPostCommitVisibilityCapture()) {
-            return captureVisibleRecipients(envelope);
+            return publication.withVisibleRecipients(captureVisibleRecipients(envelope));
         }
-        // Terminal events have no active task to authorize after commit, so only invalidation is emitted.
         return publication;
     }
 
-    private TaskRealtimePublication captureVisibleRecipients(TaskRealtimeEnvelope envelope) {
+    private Set<String> captureVisibleRecipients(TaskRealtimeEnvelope envelope) {
         Set<String> visibleRecipients = new LinkedHashSet<>();
         for (SimpUser user : connectedUsers()) {
-            if (isEligibleRecipient(user) && canReadCommittedTask(user.getName(), envelope)) {
+            if (isEligibleRecipient(user) && canReadTask(user.getName(), envelope)) {
                 visibleRecipients.add(user.getName());
             }
         }
-        return new TaskRealtimePublication(envelope, visibleRecipients);
+        return visibleRecipients;
     }
 
     public void publish(TaskRealtimePublication publication) {
@@ -79,17 +86,11 @@ public class TaskEventBroadcaster {
         }
 
         int attempted = 0;
-        TaskRealtimeEnvelope accessInvalidation = envelope.requiresVisibilityReconciliation()
-                ? TaskRealtimeEnvelope.accessInvalidated()
-                : null;
         for (SimpUser user : users) {
             if (!isEligibleRecipient(user)) {
                 continue;
             }
-            boolean canRead = publication.visibleRecipientsBeforeCommit().contains(user.getName());
-            TaskRealtimeEnvelope outboundEnvelope = canRead
-                    ? envelope
-                    : accessInvalidation;
+            TaskRealtimeEnvelope outboundEnvelope = outboundEnvelope(publication, user.getName());
             if (outboundEnvelope == null) {
                 continue;
             }
@@ -115,6 +116,23 @@ public class TaskEventBroadcaster {
         publish(finalizePublicationAfterCommit(publication));
     }
 
+    private TaskRealtimeEnvelope outboundEnvelope(TaskRealtimePublication publication, String userId) {
+        TaskRealtimeEnvelope envelope = publication.envelope();
+        if (envelope.type() == TaskEventType.TASK_UPSERT) {
+            if (publication.visibleRecipients().contains(userId)) {
+                return envelope;
+            }
+            return envelope.eventType() == TaskLifecycleEvent.CREATE
+                    ? null
+                    : TaskRealtimeEnvelope.accessInvalidated();
+        }
+        if (envelope.type() == TaskEventType.TASK_REMOVE
+                && userId.equals(publication.capturedRemoveAssignee())) {
+            return envelope;
+        }
+        return TaskRealtimeEnvelope.accessInvalidated();
+    }
+
     private Set<SimpUser> connectedUsers() {
         try {
             Set<SimpUser> users = userRegistry.getUsers();
@@ -132,7 +150,7 @@ public class TaskEventBroadcaster {
                 && !TaskRealtimeHandshakeHandler.isRoutingOnlyPrincipal(user.getPrincipal());
     }
 
-    private boolean canReadCommittedTask(String userId, TaskRealtimeEnvelope envelope) {
+    private boolean canReadTask(String userId, TaskRealtimeEnvelope envelope) {
         Authentication previousAuthentication = identityService.getCurrentAuthentication();
         try {
             identityService.clearAuthentication();
@@ -141,6 +159,7 @@ public class TaskEventBroadcaster {
                     .list()
                     .stream()
                     .map(group -> group.getId())
+                    .filter(groupId -> groupId != null && !groupId.isBlank())
                     .toList();
             List<String> tenantIds = identityService.createTenantQuery()
                     .userMember(userId)
@@ -150,23 +169,18 @@ public class TaskEventBroadcaster {
                     .map(tenant -> tenant.getId())
                     .toList();
             identityService.setAuthentication(userId, groupIds, tenantIds);
-            TaskQuery query = taskService.createTaskQuery().taskId(envelope.taskId());
-            if (!authorizationEnabled) {
-                // The task UI remains membership-scoped even when Camunda REST is globally readable.
-                query.or()
-                        .taskAssignee(userId)
-                        .taskCandidateUser(userId)
-                        .endOr();
+            if (authorizationEnabled) {
+                return hasTask(taskService.createTaskQuery().taskId(envelope.taskId()));
             }
-            if (query.count() == 0) {
-                return false;
-            }
-            if (envelope.eventType() != TaskLifecycleEvent.ASSIGNMENT) {
-                return true;
-            }
-            Task committedTask = query.singleResult();
-            return committedTask != null
-                    && Objects.equals(envelope.assignee(), committedTask.getAssignee());
+            return hasTask(taskService.createTaskQuery().taskId(envelope.taskId()).taskAssignee(userId))
+                    || hasTask(taskService.createTaskQuery()
+                    .taskId(envelope.taskId())
+                    .taskCandidateUser(userId)
+                    .includeAssignedTasks())
+                    || (!groupIds.isEmpty() && hasTask(taskService.createTaskQuery()
+                    .taskId(envelope.taskId())
+                    .taskCandidateGroupIn(groupIds)
+                    .includeAssignedTasks()));
         } catch (RuntimeException exception) {
             logger.warn("Could not verify realtime task visibility without user or payload details");
             return false;
@@ -178,4 +192,9 @@ public class TaskEventBroadcaster {
             }
         }
     }
+
+    private boolean hasTask(TaskQuery query) {
+        return query.count() > 0;
+    }
+
 }

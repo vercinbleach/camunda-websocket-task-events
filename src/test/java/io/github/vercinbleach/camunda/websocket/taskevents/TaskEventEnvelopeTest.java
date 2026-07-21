@@ -10,13 +10,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TaskEventEnvelopeTest {
     @Test
-    void serializesOnlyTheVersionedTaskEventFields() throws Exception {
+    void serializesVersionThreeUpsertsWithoutAssigneeMetadata() throws Exception {
         TaskRealtimeEnvelope envelope = new TaskRealtimeEnvelope(
-                2,
-                TaskEventType.TASK_EVENT,
+                TaskRealtimeEnvelope.CURRENT_SCHEMA_VERSION,
+                TaskEventType.TASK_UPSERT,
                 "task-123",
-                TaskLifecycleEvent.ASSIGNMENT,
-                "demo");
+                TaskLifecycleEvent.ASSIGNMENT);
 
         Set<String> actualFields = new java.util.HashSet<>();
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
@@ -24,29 +23,28 @@ class TaskEventEnvelopeTest {
         node.fieldNames().forEachRemaining(actualFields::add);
 
         assertThat(actualFields).containsExactlyInAnyOrder(
-                "schemaVersion", "type", "taskId", "eventType", "assignee");
-        assertThat(node.get("schemaVersion").asInt()).isEqualTo(2);
-        assertThat(node.get("type").asText()).isEqualTo("TASK_EVENT");
+                "schemaVersion", "type", "taskId", "eventType");
+        assertThat(node.get("schemaVersion").asInt()).isEqualTo(3);
+        assertThat(node.get("type").asText()).isEqualTo("TASK_UPSERT");
         assertThat(node.get("taskId").asText()).isEqualTo("task-123");
         assertThat(node.get("eventType").asText()).isEqualTo("assignment");
-        assertThat(node.get("assignee").asText()).isEqualTo("demo");
     }
 
     @Test
-    void omitsTheOptionalAssigneeWithoutAddingBusinessData() throws Exception {
+    void serializesTaskRemovalWithOnlyItsPublicLifecycleMetadata() throws Exception {
         TaskRealtimeEnvelope envelope = new TaskRealtimeEnvelope(
-                2,
-                TaskEventType.TASK_EVENT,
+                TaskRealtimeEnvelope.CURRENT_SCHEMA_VERSION,
+                TaskEventType.TASK_REMOVE,
                 "task-123",
-                TaskLifecycleEvent.CREATE,
-                null);
+                TaskLifecycleEvent.COMPLETE);
 
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
         var node = mapper.readTree(mapper.writeValueAsString(envelope));
 
-        assertThat(node.has("assignee")).isFalse();
         assertThat(node.fieldNames()).toIterable().containsExactly(
                 "schemaVersion", "type", "taskId", "eventType");
+        assertThat(node.get("type").asText()).isEqualTo("TASK_REMOVE");
+        assertThat(node.get("eventType").asText()).isEqualTo("complete");
     }
 
     @Test
@@ -57,29 +55,23 @@ class TaskEventEnvelopeTest {
 
         assertThat(node.fieldNames()).toIterable().containsExactly(
                 "schemaVersion", "type");
+        assertThat(node.get("schemaVersion").asInt()).isEqualTo(3);
         assertThat(node.get("type").asText()).isEqualTo("TASKS_INVALIDATED");
     }
 
     @Test
-    void reconcilesVisibilityWhenATimedOutTaskIsNoLongerReadable() {
-        TaskRealtimeEnvelope envelope = new TaskRealtimeEnvelope(
-                TaskRealtimeEnvelope.CURRENT_SCHEMA_VERSION,
-                TaskEventType.TASK_EVENT,
-                "task-123",
-                TaskLifecycleEvent.TIMEOUT,
-                null);
-
-        assertThat(envelope.requiresVisibilityReconciliation()).isTrue();
-    }
-
-    @Test
-    void rejectsAssigneeMetadataOutsideAssignmentEvents() {
+    void rejectsLifecycleEventsMappedToTheWrongEnvelopeType() {
         assertThatThrownBy(() -> new TaskRealtimeEnvelope(
-                2,
-                TaskEventType.TASK_EVENT,
+                TaskRealtimeEnvelope.CURRENT_SCHEMA_VERSION,
+                TaskEventType.TASK_UPSERT,
                 "task-123",
-                TaskLifecycleEvent.UPDATE,
-                "demo"))
+                TaskLifecycleEvent.COMPLETE))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new TaskRealtimeEnvelope(
+                TaskRealtimeEnvelope.CURRENT_SCHEMA_VERSION,
+                TaskEventType.TASK_REMOVE,
+                "task-123",
+                TaskLifecycleEvent.UPDATE))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

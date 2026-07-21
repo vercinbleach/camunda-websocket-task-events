@@ -6,12 +6,12 @@ import java.util.Arrays;
 import java.util.Optional;
 
 public enum TaskLifecycleEvent {
+    // Camunda 7.24's Spring EventPublisherPlugin does not publish TaskListener timeout events.
     CREATE("create"),
     ASSIGNMENT("assignment"),
     UPDATE("update"),
     COMPLETE("complete"),
-    DELETE("delete"),
-    TIMEOUT("timeout");
+    DELETE("delete");
 
     private final String value;
 
@@ -22,6 +22,10 @@ public enum TaskLifecycleEvent {
     @JsonValue
     public String value() {
         return value;
+    }
+
+    public boolean isUpsert() {
+        return this == CREATE || this == ASSIGNMENT || this == UPDATE;
     }
 
     public static Optional<TaskLifecycleEvent> fromCamundaEventName(String eventName) {

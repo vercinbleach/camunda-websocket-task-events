@@ -36,6 +36,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
 
 @SpringJUnitConfig(CamundaTaskEventListenerTest.TestConfiguration.class)
@@ -178,6 +179,16 @@ class CamundaTaskEventListenerTest {
         @Bean
         TaskEventPublicationService publicationService() {
             return mock(TaskEventPublicationService.class);
+        }
+
+        @Bean
+        TaskEventBroadcaster taskEventBroadcaster() {
+            TaskEventBroadcaster broadcaster = mock(TaskEventBroadcaster.class);
+            when(broadcaster.capturePublication(any(TaskRealtimeEnvelope.class), any()))
+                    .thenAnswer(invocation -> TaskRealtimePublication.capture(
+                            invocation.getArgument(0),
+                            invocation.getArgument(1)));
+            return broadcaster;
         }
 
         @Bean
