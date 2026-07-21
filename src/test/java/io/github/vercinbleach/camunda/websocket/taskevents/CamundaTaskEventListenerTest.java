@@ -36,6 +36,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.ArgumentMatchers.any;
 
 @SpringJUnitConfig(CamundaTaskEventListenerTest.TestConfiguration.class)
 class CamundaTaskEventListenerTest {
@@ -54,7 +55,7 @@ class CamundaTaskEventListenerTest {
 
         runtimeService.deleteProcessInstance(instance.getId(), "test", true, false);
 
-        verify(publicationService).enqueueTaskInvalidation();
+        verify(publicationService).enqueue(any(TaskRealtimePublication.class));
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(instance.getId())
                 .count()).isZero();
@@ -85,7 +86,7 @@ class CamundaTaskEventListenerTest {
 
         ProcessInstance instance = processEngine.getRuntimeService()
                 .startProcessInstanceByKey(processDefinitionKey);
-        verify(publicationService, atLeastOnce()).enqueueTaskInvalidation();
+        verify(publicationService, atLeastOnce()).enqueue(any(TaskRealtimePublication.class));
         assertThat(repositoryService.createProcessDefinitionQuery()
                 .deploymentId(deployment.getId())
                 .count()).isOne();
@@ -177,6 +178,11 @@ class CamundaTaskEventListenerTest {
         @Bean
         TaskEventPublicationService publicationService() {
             return mock(TaskEventPublicationService.class);
+        }
+
+        @Bean
+        TaskService taskService(ProcessEngine processEngine) {
+            return processEngine.getTaskService();
         }
     }
 }

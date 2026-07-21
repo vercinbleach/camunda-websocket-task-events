@@ -8,20 +8,20 @@ import org.springframework.stereotype.Service;
 public class TaskEventPublicationService {
     private static final Logger logger = LoggerFactory.getLogger(TaskEventPublicationService.class);
 
-    private final TaskEventCoalescer coalescer;
+    private final TaskEventDispatcher dispatcher;
     private final TaskRealtimeMetrics metrics;
 
-    public TaskEventPublicationService(TaskEventCoalescer coalescer, TaskRealtimeMetrics metrics) {
-        this.coalescer = coalescer;
+    public TaskEventPublicationService(TaskEventDispatcher dispatcher, TaskRealtimeMetrics metrics) {
+        this.dispatcher = dispatcher;
         this.metrics = metrics;
     }
 
-    public void enqueueTaskInvalidation() {
+    public void enqueue(TaskRealtimePublication publication) {
         metrics.recordCommittedEvent();
         try {
-            coalescer.request();
+            dispatcher.dispatch(publication);
         } catch (RuntimeException exception) {
-            logger.warn("Realtime invalidation enqueue failed without payload details");
+            logger.warn("Realtime task event enqueue failed without payload details");
         }
     }
 

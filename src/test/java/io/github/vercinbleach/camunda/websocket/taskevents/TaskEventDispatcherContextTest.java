@@ -1,6 +1,10 @@
 package io.github.vercinbleach.camunda.websocket.taskevents;
 
 import org.junit.jupiter.api.Test;
+import org.camunda.bpm.engine.IdentityService;
+import org.camunda.bpm.engine.ProcessEngine;
+import org.camunda.bpm.engine.ProcessEngineConfiguration;
+import org.camunda.bpm.engine.TaskService;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,8 +19,9 @@ import org.springframework.messaging.simp.user.SimpUserRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-class TaskEventCoalescerContextTest {
+class TaskEventDispatcherContextTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(RealtimeConstructorConfiguration.class);
     private final WebApplicationContextRunner fullContextRunner = new WebApplicationContextRunner()
@@ -27,7 +32,7 @@ class TaskEventCoalescerContextTest {
     void selectsProductionConstructorsInASpringContext() {
         contextRunner.run(context -> {
             assertThat(context).hasNotFailed();
-            assertThat(context).hasSingleBean(TaskEventCoalescer.class);
+            assertThat(context).hasSingleBean(TaskEventDispatcher.class);
             assertThat(context).hasSingleBean(TaskEventBroadcaster.class);
         });
     }
@@ -62,14 +67,15 @@ class TaskEventCoalescerContextTest {
 
         assertThat(executor[0].getCorePoolSize()).isEqualTo(1);
         assertThat(executor[0].getMaxPoolSize()).isEqualTo(1);
-        assertThat(executor[0].getThreadPoolExecutor().getQueue().remainingCapacity()).isZero();
+        assertThat(executor[0].getThreadPoolExecutor().getQueue().remainingCapacity())
+                .isEqualTo(TaskRealtimePublisherConfiguration.PUBLISHER_QUEUE_CAPACITY);
         assertThat(executor[0].getThreadPoolExecutor().isShutdown()).isTrue();
     }
 
     @Configuration(proxyBeanMethods = false)
     @Import({
             TaskEventBroadcaster.class,
-            TaskEventCoalescer.class,
+            TaskEventDispatcher.class,
             TaskRealtimePublisherConfiguration.class
     })
     static class RealtimeConstructorConfiguration {
@@ -88,6 +94,24 @@ class TaskEventCoalescerContextTest {
             return mock(TaskRealtimeMetrics.class);
         }
 
+        @Bean
+        IdentityService identityService() {
+            return mock(IdentityService.class);
+        }
+
+        @Bean
+        TaskService taskService() {
+            return mock(TaskService.class);
+        }
+
+        @Bean
+        ProcessEngine processEngine() {
+            ProcessEngine engine = mock(ProcessEngine.class);
+            ProcessEngineConfiguration configuration = mock(ProcessEngineConfiguration.class);
+            when(engine.getProcessEngineConfiguration()).thenReturn(configuration);
+            return engine;
+        }
+
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -95,7 +119,7 @@ class TaskEventCoalescerContextTest {
     @Import({
             TaskRealtimeWebSocketConfig.class,
             TaskEventBroadcaster.class,
-            TaskEventCoalescer.class,
+            TaskEventDispatcher.class,
             TaskRealtimePublisherConfiguration.class,
             TaskEventPublicationService.class,
             TaskRealtimeMetrics.class,
@@ -109,6 +133,24 @@ class TaskEventCoalescerContextTest {
         @Bean
         MeterRegistry meterRegistry() {
             return new SimpleMeterRegistry();
+        }
+
+        @Bean
+        IdentityService identityService() {
+            return mock(IdentityService.class);
+        }
+
+        @Bean
+        TaskService taskService() {
+            return mock(TaskService.class);
+        }
+
+        @Bean
+        ProcessEngine processEngine() {
+            ProcessEngine engine = mock(ProcessEngine.class);
+            ProcessEngineConfiguration configuration = mock(ProcessEngineConfiguration.class);
+            when(engine.getProcessEngineConfiguration()).thenReturn(configuration);
+            return engine;
         }
     }
 }
