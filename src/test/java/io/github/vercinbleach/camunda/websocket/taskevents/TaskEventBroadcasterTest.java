@@ -8,9 +8,8 @@ import org.camunda.bpm.engine.identity.Group;
 import org.camunda.bpm.engine.identity.GroupQuery;
 import org.camunda.bpm.engine.identity.Tenant;
 import org.camunda.bpm.engine.identity.TenantQuery;
-import org.camunda.bpm.engine.task.TaskQuery;
-import org.camunda.bpm.engine.task.Task;
 import org.camunda.bpm.engine.impl.identity.Authentication;
+import org.camunda.bpm.engine.task.TaskQuery;
 import org.junit.jupiter.api.Test;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.messaging.simp.user.SimpUser;
@@ -19,34 +18,51 @@ import org.springframework.messaging.simp.user.SimpUserRegistry;
 import java.security.Principal;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.inOrder;
-import static org.assertj.core.api.Assertions.assertThat;
 
 class TaskEventBroadcasterTest {
     @Test
-    void sendsTaskMetadataOnlyWhenCamundaConfirmsEffectiveVisibility() {
+    void updatesInvalidateUsersWhoseCurrentMembershipCannotBeConfirmed() {
         TestHarness harness = new TestHarness();
         SimpUser visible = harness.user("visible", () -> "visible");
-        SimpUser denied = harness.user("denied", () -> "denied");
-        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(visible, denied)));
-        harness.visibilityCounts(1L, 0L, 1L);
-        TaskRealtimeEnvelope envelope = taskEvent(TaskLifecycleEvent.CREATE, null);
+        SimpUser former = harness.user("former", () -> "former");
+        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(visible, former)));
+        harness.visibilityCounts(1L, 0L, 0L);
+        TaskRealtimeEnvelope envelope = taskEvent(TaskLifecycleEvent.UPDATE);
 
         harness.broadcaster().publish(envelope);
 
         verify(harness.template).convertAndSendToUser("visible", "/queue/task-events", envelope);
-        verify(harness.template, never())
-                .convertAndSendToUser(eq("denied"), eq("/queue/task-events"), any());
+        verify(harness.template).convertAndSendToUser(
+                "former", "/queue/task-events", TaskRealtimeEnvelope.accessInvalidated());
+    }
+
+    @Test
+    void createDoesNotWakeUsersWhoCannotReadTheNewTask() {
+        TestHarness harness = new TestHarness();
+        SimpUser visible = harness.user("visible", () -> "visible");
+        SimpUser unrelated = harness.user("unrelated", () -> "unrelated");
+        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(visible, unrelated)));
+        harness.visibilityCounts(1L, 0L, 0L);
+
+        harness.broadcaster().publish(taskEvent(TaskLifecycleEvent.CREATE));
+
+        verify(harness.template).convertAndSendToUser(
+                "visible", "/queue/task-events", taskEvent(TaskLifecycleEvent.CREATE));
+        verify(harness.template, never()).convertAndSendToUser(
+                eq("unrelated"), eq("/queue/task-events"), any());
     }
 
     @Test
@@ -55,7 +71,7 @@ class TaskEventBroadcasterTest {
         SimpUser reader = harness.user("global-reader", () -> "global-reader");
         when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(reader)));
         harness.visibilityCounts(1L);
-        TaskRealtimeEnvelope envelope = taskEvent(TaskLifecycleEvent.CREATE, null);
+        TaskRealtimeEnvelope envelope = taskEvent(TaskLifecycleEvent.CREATE);
 
         harness.broadcaster().publish(envelope);
 
@@ -65,83 +81,84 @@ class TaskEventBroadcasterTest {
     }
 
     @Test
-    void sendsPayloadFreeInvalidationWhenEffectiveVisibilityWasRevoked() {
+    void includesAnAssignedTaskForItsDirectCandidate() {
         TestHarness harness = new TestHarness();
-        SimpUser current = harness.user("current", () -> "current");
-        SimpUser former = harness.user("former", () -> "former");
-        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(current, former)));
-        harness.visibilityCounts(1L, 0L, 1L);
-        harness.committedAssignee("current");
-        TaskRealtimeEnvelope envelope = taskEvent(TaskLifecycleEvent.ASSIGNMENT, "current");
+        SimpUser candidate = harness.user("candidate", () -> "candidate");
+        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(candidate)));
+        harness.visibilityCounts(0L, 1L);
+        TaskRealtimeEnvelope envelope = taskEvent(TaskLifecycleEvent.ASSIGNMENT);
 
         harness.broadcaster().publish(envelope);
 
-        verify(harness.template).convertAndSendToUser("current", "/queue/task-events", envelope);
-        verify(harness.template).convertAndSendToUser(
-                "former",
-                "/queue/task-events",
-                TaskRealtimeEnvelope.accessInvalidated());
+        verify(harness.taskQuery).taskCandidateUser("candidate");
+        verify(harness.taskQuery).includeAssignedTasks();
+        verify(harness.template).convertAndSendToUser("candidate", "/queue/task-events", envelope);
     }
 
     @Test
-    void emitsOnlyPayloadFreeInvalidationForTerminalEvents() {
+    void includesAnAssignedTaskForItsCandidateGroup() {
         TestHarness harness = new TestHarness();
-        SimpUser visible = harness.user("visible", () -> "visible");
-        SimpUser outsider = harness.user("outsider", () -> "outsider");
-        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(visible, outsider)));
-        TaskRealtimeEnvelope complete = taskEvent(TaskLifecycleEvent.COMPLETE, null);
+        SimpUser candidate = harness.user("candidate", () -> "candidate");
+        Group group = mock(Group.class);
+        when(group.getId()).thenReturn("candidate-group");
+        when(harness.groupQuery.list()).thenReturn(List.of(group));
+        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(candidate)));
+        harness.visibilityCounts(0L, 0L, 1L);
 
-        TaskRealtimePublication publication = harness.broadcaster().capturePublication(complete);
-        publication = harness.broadcaster().finalizePublicationAfterCommit(publication);
-        harness.broadcaster().publish(publication);
+        harness.broadcaster().publish(taskEvent(TaskLifecycleEvent.UPDATE));
 
-        assertThat(publication.visibleRecipientsBeforeCommit()).isEmpty();
-        verify(harness.template).convertAndSendToUser(
-                "visible", "/queue/task-events", TaskRealtimeEnvelope.accessInvalidated());
-        verify(harness.template).convertAndSendToUser(
-                "outsider", "/queue/task-events", TaskRealtimeEnvelope.accessInvalidated());
+        verify(harness.taskQuery).taskCandidateGroupIn(List.of("candidate-group"));
+        verify(harness.taskQuery, atLeastOnce()).includeAssignedTasks();
     }
 
     @Test
-    void routesANonTerminalEventUsingItsCapturedVisibilitySnapshot() {
+    void sendsTaskRemovalOnlyToTheAssigneeCapturedBeforeCommit() {
         TestHarness harness = new TestHarness();
-        SimpUser alice = harness.user("alice", () -> "alice");
-        SimpUser bob = harness.user("bob", () -> "bob");
-        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(alice, bob)));
-        harness.visibilityCounts(1L, 0L);
-        harness.committedAssignee("alice");
-        TaskRealtimeEnvelope assignment = taskEvent(TaskLifecycleEvent.ASSIGNMENT, "alice");
+        SimpUser assignee = harness.user("assignee", () -> "assignee");
+        SimpUser unknownRecipient = harness.user("unknown", () -> "unknown");
+        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(assignee, unknownRecipient)));
+        TaskRealtimeEnvelope remove = taskEvent(TaskLifecycleEvent.COMPLETE);
+        TaskRealtimePublication publication = new TaskRealtimePublication(remove, Set.of(), "assignee");
 
-        TaskRealtimePublication publication = harness.broadcaster().capturePublication(assignment);
-        publication = harness.broadcaster().finalizePublicationAfterCommit(publication);
-        clearInvocations(harness.taskQuery);
-        harness.broadcaster().publish(publication);
+        harness.broadcaster().publish(harness.broadcaster().finalizePublicationAfterCommit(publication));
 
-        verify(harness.taskQuery, never()).count();
-        verify(harness.template).convertAndSendToUser("alice", "/queue/task-events", assignment);
+        verify(harness.template).convertAndSendToUser("assignee", "/queue/task-events", remove);
         verify(harness.template).convertAndSendToUser(
-                "bob", "/queue/task-events", TaskRealtimeEnvelope.accessInvalidated());
+                "unknown", "/queue/task-events", TaskRealtimeEnvelope.accessInvalidated());
+        verify(harness.taskService, never()).createTaskQuery();
     }
 
     @Test
-    void dropsAStaleAssignmentWhoseAssigneeChangedBeforeCommit() {
-        TestHarness harness = new TestHarness();
-        SimpUser alice = harness.user("alice", () -> "alice");
-        SimpUser bob = harness.user("bob", () -> "bob");
-        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(alice, bob)));
-        harness.visibilityCounts(1L, 0L);
-        harness.committedAssignee("bob");
-        TaskRealtimeEnvelope assignment = taskEvent(TaskLifecycleEvent.ASSIGNMENT, "alice");
+    void capturesTerminalAssigneeOnlyWithEffectiveTenantAwareTaskRead() {
+        TestHarness harness = new TestHarness(true);
+        Tenant tenant = mock(Tenant.class);
+        when(tenant.getId()).thenReturn("tenant-a");
+        when(harness.tenantQuery.list()).thenReturn(List.of(tenant));
+        harness.visibilityCounts(1L);
 
-        TaskRealtimePublication publication = harness.broadcaster().capturePublication(assignment);
-        publication = harness.broadcaster().finalizePublicationAfterCommit(publication);
+        TaskRealtimePublication publication = harness.broadcaster().capturePublication(
+                taskEvent(TaskLifecycleEvent.COMPLETE),
+                "assignee");
+
+        assertThat(publication.capturedRemoveAssignee()).isEqualTo("assignee");
+        verify(harness.identityService).setAuthentication("assignee", List.of(), List.of("tenant-a"));
+    }
+
+    @Test
+    void removesTerminalMetadataWhenDirectReadAuthorizationCannotBeConfirmed() {
+        TestHarness harness = new TestHarness(true);
+        SimpUser assignee = harness.user("assignee", () -> "assignee");
+        when(harness.userRegistry.getUsers()).thenReturn(Set.of(assignee));
+        harness.visibilityCounts(0L);
+
+        TaskRealtimePublication publication = harness.broadcaster().capturePublication(
+                taskEvent(TaskLifecycleEvent.DELETE),
+                "assignee");
         harness.broadcaster().publish(publication);
 
-        assertThat(publication.visibleRecipientsBeforeCommit()).isEmpty();
+        assertThat(publication.capturedRemoveAssignee()).isNull();
         verify(harness.template).convertAndSendToUser(
-                "alice", "/queue/task-events", TaskRealtimeEnvelope.accessInvalidated());
-        verify(harness.template).convertAndSendToUser(
-                "bob", "/queue/task-events", TaskRealtimeEnvelope.accessInvalidated());
+                "assignee", "/queue/task-events", TaskRealtimeEnvelope.accessInvalidated());
     }
 
     @Test
@@ -153,9 +170,7 @@ class TaskEventBroadcasterTest {
         when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(member)));
         harness.visibilityCounts(1L);
 
-        TaskRealtimePublication publication = harness.broadcaster()
-                .capturePublication(taskEvent(TaskLifecycleEvent.UPDATE, null));
-        harness.broadcaster().finalizePublicationAfterCommit(publication);
+        harness.broadcaster().publish(taskEvent(TaskLifecycleEvent.UPDATE));
 
         var order = inOrder(harness.identityService);
         order.verify(harness.identityService).getCurrentAuthentication();
@@ -167,56 +182,29 @@ class TaskEventBroadcasterTest {
     }
 
     @Test
-    void evaluatesCamundaVisibilityWithTheRecipientsGroupsAndTenants() {
+    void skipsRoutingOnlyPrincipals() {
         TestHarness harness = new TestHarness();
-        SimpUser member = harness.user("member", () -> "member");
-        Group group = mock(Group.class);
-        Tenant tenant = mock(Tenant.class);
-        when(group.getId()).thenReturn("candidate-group");
-        when(tenant.getId()).thenReturn("tenant-a");
-        when(harness.groupQuery.list()).thenReturn(List.of(group));
-        when(harness.tenantQuery.list()).thenReturn(List.of(tenant));
-        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(member)));
-        harness.visibilityCounts(1L);
-
-        harness.broadcaster().publish(taskEvent(TaskLifecycleEvent.CREATE, null));
-
-        verify(harness.identityService).setAuthentication(
-                "member",
-                List.of("candidate-group"),
-                List.of("tenant-a"));
-        verify(harness.identityService, atLeastOnce()).clearAuthentication();
-    }
-
-    @Test
-    void distinguishesRoutingOnlyPrincipalsByTypeRatherThanUsernamePrefix() {
-        TestHarness harness = new TestHarness();
-        String prefixedName = "task-events-session:legitimate-user";
-        SimpUser legitimate = harness.user(prefixedName, () -> prefixedName);
+        String userId = "task-events-session:legitimate-user";
+        SimpUser legitimate = harness.user(userId, () -> userId);
         SimpUser routingOnly = harness.user(
                 "task-events-session:opaque",
                 new TaskRealtimeHandshakeHandler.RoutingOnlyPrincipal("task-events-session:opaque"));
-        when(harness.userRegistry.getUsers()).thenReturn(
-                new LinkedHashSet<>(List.of(legitimate, routingOnly)));
+        when(harness.userRegistry.getUsers()).thenReturn(new LinkedHashSet<>(List.of(legitimate, routingOnly)));
         harness.visibilityCounts(1L);
-        TaskRealtimeEnvelope envelope = taskEvent(TaskLifecycleEvent.CREATE, null);
 
-        harness.broadcaster().publish(envelope);
+        harness.broadcaster().publish(taskEvent(TaskLifecycleEvent.CREATE));
 
-        verify(harness.template).convertAndSendToUser(prefixedName, "/queue/task-events", envelope);
+        verify(harness.template).convertAndSendToUser(userId, "/queue/task-events", taskEvent(TaskLifecycleEvent.CREATE));
         verify(harness.template, never()).convertAndSendToUser(
-                eq("task-events-session:opaque"),
-                eq("/queue/task-events"),
-                any());
+                eq("task-events-session:opaque"), eq("/queue/task-events"), any());
     }
 
-    private static TaskRealtimeEnvelope taskEvent(TaskLifecycleEvent eventType, String assignee) {
+    private static TaskRealtimeEnvelope taskEvent(TaskLifecycleEvent eventType) {
         return new TaskRealtimeEnvelope(
-                2,
-                TaskEventType.TASK_EVENT,
+                TaskRealtimeEnvelope.CURRENT_SCHEMA_VERSION,
+                eventType.isUpsert() ? TaskEventType.TASK_UPSERT : TaskEventType.TASK_REMOVE,
                 "task-123",
-                eventType,
-                assignee);
+                eventType);
     }
 
     private static final class TestHarness {
@@ -229,7 +217,6 @@ class TaskEventBroadcasterTest {
         private final GroupQuery groupQuery = mock(GroupQuery.class);
         private final TenantQuery tenantQuery = mock(TenantQuery.class);
         private final TaskQuery taskQuery = mock(TaskQuery.class);
-        private final Task committedTask = mock(Task.class);
 
         private TestHarness() {
             this(false);
@@ -247,10 +234,10 @@ class TaskEventBroadcasterTest {
             when(tenantQuery.list()).thenReturn(List.of());
             when(taskService.createTaskQuery()).thenReturn(taskQuery);
             when(taskQuery.taskId(anyString())).thenReturn(taskQuery);
-            when(taskQuery.or()).thenReturn(taskQuery);
             when(taskQuery.taskAssignee(anyString())).thenReturn(taskQuery);
             when(taskQuery.taskCandidateUser(anyString())).thenReturn(taskQuery);
-            when(taskQuery.endOr()).thenReturn(taskQuery);
+            when(taskQuery.taskCandidateGroupIn(anyList())).thenReturn(taskQuery);
+            when(taskQuery.includeAssignedTasks()).thenReturn(taskQuery);
         }
 
         private TaskEventBroadcaster broadcaster() {
@@ -272,11 +259,6 @@ class TaskEventBroadcasterTest {
 
         private void visibilityCounts(Long... counts) {
             when(taskQuery.count()).thenReturn(counts[0], java.util.Arrays.copyOfRange(counts, 1, counts.length));
-        }
-
-        private void committedAssignee(String assignee) {
-            when(taskQuery.singleResult()).thenReturn(committedTask);
-            when(committedTask.getAssignee()).thenReturn(assignee);
         }
     }
 }

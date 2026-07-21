@@ -51,6 +51,7 @@ import static org.assertj.core.api.SoftAssertions.assertSoftly;
                 "camunda.bpm.database.schema-update=true",
                 "camunda.bpm.history-level=none",
                 "camunda.bpm.job-execution.enabled=false",
+                "camunda.bpm.authorization.enabled=true",
                 "camunda.bpm.eventing.execution=false",
                 "camunda.bpm.eventing.history=false",
                 "camunda.bpm.eventing.skippable=false"
@@ -100,7 +101,7 @@ class SseParityEndToEndTest {
             JsonNode assignmentInvalidation = awaitInvalidation(outsiderMessages);
 
             taskService.complete(task.getId());
-            JsonNode completeInvalidation = awaitInvalidation(messages);
+            JsonNode complete = awaitEvent(messages, task.getId(), "complete");
             JsonNode outsiderCompleteInvalidation = awaitInvalidation(outsiderMessages);
 
             var deletedInstance = processEngine.getRuntimeService()
@@ -116,12 +117,12 @@ class SseParityEndToEndTest {
             JsonNode outsiderDeleteInvalidation = awaitInvalidation(outsiderMessages);
 
             assertSoftly(softly -> {
-                assertSseContext(softly, create, task.getId(), "create", null);
-                assertSseContext(softly, update, task.getId(), "update", null);
-                assertSseContext(softly, assignment, task.getId(), "assignment", USERNAME);
+                assertSseContext(softly, create, task.getId(), "create");
+                assertSseContext(softly, update, task.getId(), "update");
+                assertSseContext(softly, assignment, task.getId(), "assignment");
+                assertSseContext(softly, complete, task.getId(), "complete");
                 assertPayloadFreeInvalidation(softly, updateInvalidation);
                 assertPayloadFreeInvalidation(softly, assignmentInvalidation);
-                assertPayloadFreeInvalidation(softly, completeInvalidation);
                 assertPayloadFreeInvalidation(softly, outsiderCompleteInvalidation);
                 assertPayloadFreeInvalidation(softly, deleteInvalidation);
                 assertPayloadFreeInvalidation(softly, outsiderDeleteInvalidation);
@@ -209,35 +210,28 @@ class SseParityEndToEndTest {
             org.assertj.core.api.SoftAssertions softly,
             JsonNode message,
             String taskId,
-            String eventType,
-            String assignee) {
+            String eventType) {
         softly.assertThat(message.path("schemaVersion").asInt())
                 .as("%s schema version", eventType)
-                .isEqualTo(2);
+                .isEqualTo(3);
         softly.assertThat(message.path("type").asText(null))
                 .as("%s envelope type", eventType)
-                .isEqualTo("TASK_EVENT");
+                .isEqualTo("complete".equals(eventType) || "delete".equals(eventType)
+                        ? "TASK_REMOVE"
+                        : "TASK_UPSERT");
         softly.assertThat(message.path("taskId").asText(null))
                 .as("%s task id", eventType)
                 .isEqualTo(taskId);
         softly.assertThat(message.path("eventType").asText(null))
                 .as("%s event type", eventType)
                 .isEqualTo(eventType);
-        if (assignee == null) {
-            softly.assertThat(message.path("assignee").isMissingNode() || message.path("assignee").isNull())
-                    .as("%s assignee", eventType)
-                    .isTrue();
-        } else {
-            softly.assertThat(message.path("assignee").asText(null))
-                    .as("%s assignee", eventType)
-                    .isEqualTo(assignee);
-        }
+        softly.assertThat(message.has("assignee")).as("%s assignee", eventType).isFalse();
     }
 
     private static void assertPayloadFreeInvalidation(
             org.assertj.core.api.SoftAssertions softly,
             JsonNode message) {
-        softly.assertThat(message.path("schemaVersion").asInt()).isEqualTo(2);
+        softly.assertThat(message.path("schemaVersion").asInt()).isEqualTo(3);
         softly.assertThat(message.path("type").asText(null)).isEqualTo("TASKS_INVALIDATED");
         softly.assertThat(message.has("taskId")).isFalse();
         softly.assertThat(message.has("eventType")).isFalse();

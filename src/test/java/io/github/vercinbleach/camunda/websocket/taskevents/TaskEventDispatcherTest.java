@@ -21,10 +21,10 @@ class TaskEventDispatcherTest {
     void resolvesVisibilityInsideTheDispatcherWorker() {
         QueuedExecutor executor = new QueuedExecutor();
         TaskEventBroadcaster broadcaster = mock(TaskEventBroadcaster.class);
-        TaskRealtimePublication pending = TaskRealtimePublication.withoutCapturedRecipients(
-                envelope(TaskLifecycleEvent.UPDATE));
+        TaskRealtimePublication pending = TaskRealtimePublication.capture(
+                envelope(TaskLifecycleEvent.UPDATE), null);
         TaskRealtimePublication resolved = new TaskRealtimePublication(
-                pending.envelope(), java.util.Set.of("demo"));
+                pending.envelope(), java.util.Set.of("demo"), null);
         when(broadcaster.finalizePublicationAfterCommit(pending)).thenReturn(resolved);
         TaskEventDispatcher dispatcher = new TaskEventDispatcher(broadcaster, executor, metrics());
 
@@ -45,9 +45,9 @@ class TaskEventDispatcherTest {
         TaskRealtimeEnvelope assignment = envelope(TaskLifecycleEvent.ASSIGNMENT);
         TaskRealtimeEnvelope complete = envelope(TaskLifecycleEvent.COMPLETE);
 
-        dispatcher.dispatch(TaskRealtimePublication.withoutCapturedRecipients(create));
-        dispatcher.dispatch(TaskRealtimePublication.withoutCapturedRecipients(assignment));
-        dispatcher.dispatch(TaskRealtimePublication.withoutCapturedRecipients(complete));
+        dispatcher.dispatch(TaskRealtimePublication.capture(create, null));
+        dispatcher.dispatch(TaskRealtimePublication.capture(assignment, null));
+        dispatcher.dispatch(TaskRealtimePublication.capture(complete, null));
         executor.runAll();
 
         assertThat(emitted).extracting(TaskRealtimePublication::envelope)
@@ -63,8 +63,8 @@ class TaskEventDispatcherTest {
         TaskEventDispatcher dispatcher = new TaskEventDispatcher(ignored -> {
         }, executor, metrics);
 
-        dispatcher.dispatch(TaskRealtimePublication.withoutCapturedRecipients(
-                envelope(TaskLifecycleEvent.UPDATE)));
+        dispatcher.dispatch(TaskRealtimePublication.capture(
+                envelope(TaskLifecycleEvent.UPDATE), null));
 
         assertThat(metrics.getPublisherRejections()).isEqualTo(1);
     }
@@ -80,10 +80,10 @@ class TaskEventDispatcherTest {
             emitted.add(event.envelope());
         }, executor, metrics());
 
-        dispatcher.dispatch(TaskRealtimePublication.withoutCapturedRecipients(
-                envelope(TaskLifecycleEvent.CREATE)));
-        dispatcher.dispatch(TaskRealtimePublication.withoutCapturedRecipients(
-                envelope(TaskLifecycleEvent.ASSIGNMENT)));
+        dispatcher.dispatch(TaskRealtimePublication.capture(
+                envelope(TaskLifecycleEvent.CREATE), null));
+        dispatcher.dispatch(TaskRealtimePublication.capture(
+                envelope(TaskLifecycleEvent.ASSIGNMENT), null));
         executor.runAll();
 
         assertThat(emitted).extracting(TaskRealtimeEnvelope::eventType)
@@ -92,11 +92,10 @@ class TaskEventDispatcherTest {
 
     private static TaskRealtimeEnvelope envelope(TaskLifecycleEvent eventType) {
         return new TaskRealtimeEnvelope(
-                2,
-                TaskEventType.TASK_EVENT,
+                TaskRealtimeEnvelope.CURRENT_SCHEMA_VERSION,
+                eventType.isUpsert() ? TaskEventType.TASK_UPSERT : TaskEventType.TASK_REMOVE,
                 "task-123",
-                eventType,
-                eventType == TaskLifecycleEvent.ASSIGNMENT ? "demo" : null);
+                eventType);
     }
 
     private static TaskRealtimeMetrics metrics() {
